@@ -1,0 +1,65 @@
+---
+- name: Define provider information for BIG-IP API calls
+  set_fact:
+    provider:
+      server: "{{ inventory_hostname }}"
+      user: "{{ bigip_username }}"
+      password: "{{ bigip_password }}"
+      server_port: 443
+      validate_certs: no
+
+- name: Gather software volume information
+  bigip_device_info:
+    gather_subset:
+      - software-volumes
+    provider: "{{ provider }}"
+  register: software_volumes_info
+
+- name: Debug - Display ALL software volumes gathered
+  debug:
+    var: software_volumes_info.software_volumes
+
+# Correct logic based on your output
+- name: Get list of inactive BIG-IP software volumes
+  set_fact:
+    available_volumes: "{{ software_volumes_info.software_volumes
+      | selectattr('active', 'equalto', 'no')
+      | map(attribute='name')
+      | select('match', '^' + software_volume_prefix)
+      | list }}"
+
+- name: Debug - Display filtered inactive volumes
+  debug:
+    var: available_volumes
+
+- name: Fail if no inactive volume found
+  fail:
+    msg: "No inactive volumes are available for upgrade!"
+  when: available_volumes | length == 0
+
+- name: Select the first inactive volume for upgrade
+  set_fact:
+    target_volume: "{{ available_volumes[0] }}"
+
+- name: Debug - Display selected software volume
+  debug:
+    msg: "Selected volume for upgrade installation: {{ target_volume }}"
+
+- name: Upload BIG-IP ISO Image
+  bigip_software_image:
+    provider: "{{ provider }}"
+    image: "{{ iso_image_name }}"
+    state: present
+
+- name: Install software onto selected volume
+  bigip_software_install:
+    provider: "{{ provider }}"
+    image: "{{ iso_image_name }}"
+    volume: "{{ target_volume }}"
+
+- name: Wait for BIG-IP to become available after reboot
+  wait_for:
+    host: "{{ inventory_hostname }}"
+    port: 443
+    delay: 120
+    timeout: 2400

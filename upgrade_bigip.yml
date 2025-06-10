@@ -1,0 +1,18 @@
+---
+- name: Upgrade F5 BIG-IP Appliances
+  hosts: bigip
+  gather_facts: no
+  connection: local
+  collections:
+    - f5networks.f5_modules
+
+  vars_prompt:
+    - name: "bigip_username"
+      prompt: "Enter your BIG-IP username"
+      private: no
+    - name: "bigip_password"
+      prompt: "Enter your BIG-IP password"
+      private: yes
+
+  roles:
+    - bigip_upgrade

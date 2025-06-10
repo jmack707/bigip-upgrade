@@ -1,0 +1,17 @@
+---
+ansible-navigator:
+  ansible:
+    config:
+      path: ansible.cfg
+
+  execution-environment:
+    container-engine: docker
+    image: dialtone21/f5_cis_ee:1.0.0
+    pull:
+      policy: missing
+    enabled: true    
+          
+  mode: interactive
+
+  playbook-artifact:
+    enable: false
