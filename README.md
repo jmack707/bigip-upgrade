@@ -1,5 +1,3 @@
-Here's your comprehensive, converted README content ready for your GitHub repository in **Markdown (.md)** format:
-
 # Ansible BIG-IP Upgrade Automation
 
 An automated and modular approach to upgrading F5 BIG-IP devices using Ansible.
