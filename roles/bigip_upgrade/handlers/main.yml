@@ -1,0 +1,6 @@
+---
+- name: reboot_bigip
+  bigip_command:
+    provider: "{{ provider }}"
+    commands:
+      - run sys reboot
