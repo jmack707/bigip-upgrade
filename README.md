@@ -49,7 +49,6 @@ f5_upgrade/
 Define these variables within `roles/bigip_upgrade/vars/main.yml`:
 
 ```yaml
-iso_image_local_path: "/home/ubuntu/f5_upgrade/BIGIP-17.5.0-0.0.15.iso"
 iso_image_name: "BIGIP-17.5.0-0.0.15.iso"
 software_volume_prefix: "HD1."
 ```
