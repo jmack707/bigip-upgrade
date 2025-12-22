@@ -1,4 +1,3 @@
 ---
-iso_image_local_path: "/tmp/images/BIGIP-17.5.0-0.0.15.iso"
 iso_image_name: "BIGIP-17.5.0-0.0.15.iso"
 software_volume_prefix: "HD1."
