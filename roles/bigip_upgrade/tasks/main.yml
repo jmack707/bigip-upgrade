@@ -22,24 +22,28 @@
 # Correct logic based on your output
 - name: Get list of inactive BIG-IP software volumes
   set_fact:
-    available_volumes: "{{ software_volumes_info.software_volumes
-      | selectattr('active', 'equalto', 'no')
-      | map(attribute='name')
-      | select('match', '^' + software_volume_prefix)
-      | list }}"
+    available_volumes: >-
+      {{
+        software_volumes_info.software_volumes
+        | selectattr('active', 'equalto', 'no')
+        | map(attribute='name')
+        | sort
+        | reverse
+        | list
+      }}
 
 - name: Debug - Display filtered inactive volumes
   debug:
     var: available_volumes
 
-- name: Fail if no inactive volume found
-  fail:
-    msg: "No inactive volumes are available for upgrade!"
-  when: available_volumes | length == 0
-
 - name: Select the first inactive volume for upgrade
   set_fact:
-    target_volume: "{{ available_volumes[0] }}"
+    target_volume: >-
+      {{
+        'HD1.2'
+        if available_volumes | length == 0
+        else available_volumes[0]
+      }}
 
 - name: Debug - Display selected software volume
   debug:
