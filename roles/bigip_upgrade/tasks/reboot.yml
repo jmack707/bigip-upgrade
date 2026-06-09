@@ -1,0 +1,13 @@
+---
+# roles/bigip_upgrade/tasks/reboot.yml
+# Reboots the BIG-IP into the target volume and waits for it to be ready.
+# Run this separately during your maintenance window after upload/install.
+# Usage: ansible-playbook upgrade_bigip.yml --tags preflight,reboot,verify
+
+- name: Reboot into target volume
+  bigip_command:
+    provider: "{{ provider }}"
+    commands:
+      - "reboot volume {{ target_volume }}"
+  delegate_to: localhost
+  ignore_errors: true

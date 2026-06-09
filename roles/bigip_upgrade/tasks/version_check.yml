@@ -1,0 +1,71 @@
+---
+# roles/bigip_upgrade/tasks/version_check.yml
+# Checks current software volumes, skips host if already on target version,
+# and selects the target volume for the upgrade.
+
+- name: Gather software volume information
+  bigip_device_info:
+    gather_subset:
+      - software-volumes
+    provider: "{{ provider }}"
+  register: software_volumes_info
+
+- name: Debug — all software volumes
+  debug:
+    var: software_volumes_info.software_volumes
+  when: debug_mode | bool
+
+- name: Check whether target version is already active
+  set_fact:
+    already_on_target: >-
+      {{
+        software_volumes_info.software_volumes
+        | selectattr('active', 'equalto', 'yes')
+        | selectattr('version', 'search', expected_version)
+        | list
+        | length > 0
+      }}
+
+- name: Skip upgrade — target version already active
+  debug:
+    msg: >
+      {{ inventory_hostname }} is already running {{ expected_version }}.
+      Skipping upgrade.
+  when: already_on_target | bool
+
+- name: End play for this host if already on target version
+  meta: end_host
+  when: already_on_target | bool
+
+# ─── Volume selection ─────────────────────────────────────────────────────────
+
+- name: Get list of inactive BIG-IP software volumes
+  set_fact:
+    available_volumes: >-
+      {{
+        software_volumes_info.software_volumes
+        | selectattr('active', 'equalto', 'no')
+        | map(attribute='name')
+        | sort
+        | reverse
+        | list
+      }}
+
+- name: Debug — inactive volumes available
+  debug:
+    var: available_volumes
+  when: debug_mode | bool
+
+- name: Select target volume for upgrade
+  set_fact:
+    target_volume: >-
+      {{
+        bigip_fallback_volume
+        if available_volumes | length == 0
+        else available_volumes[0]
+      }}
+
+- name: Debug — selected volume
+  debug:
+    msg: "Target volume for upgrade: {{ target_volume }}"
+  when: debug_mode | bool

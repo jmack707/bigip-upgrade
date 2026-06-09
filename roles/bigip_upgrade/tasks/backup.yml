@@ -1,0 +1,34 @@
+---
+# roles/bigip_upgrade/tasks/backup.yml
+
+- name: Get current date for UCS filename
+  command: date +%Y-%m-%d
+  register: backup_date
+  delegate_to: localhost
+  changed_when: false
+
+- name: Set UCS filename fact
+  set_fact:
+    ucs_filename: "pre-upgrade-{{ bigip_device_hostname }}-{{ backup_date.stdout }}.ucs"
+
+- name: Create local UCS backup directory
+  file:
+    path: "{{ ucs_backup_dest }}/{{ bigip_device_hostname }}"
+    state: directory
+    mode: '0755'
+  delegate_to: localhost
+
+- name: Save and fetch UCS backup
+  bigip_ucs_fetch:
+    provider: "{{ provider }}"
+    src: "{{ ucs_filename }}"
+    dest: "{{ ucs_backup_dest }}/{{ bigip_device_hostname }}/{{ ucs_filename }}"
+    create_on_missing: true
+    async_timeout: "{{ ucs_async_timeout }}"
+  delegate_to: localhost
+  register: ucs_backup
+
+- name: Debug — UCS backup location
+  debug:
+    msg: "UCS backup saved to: {{ ucs_backup.dest }}"
+  when: debug_mode | bool

@@ -1,0 +1,55 @@
+---
+# roles/bigip_upgrade/tasks/preflight.yml
+# Validates local files, gathers device hostname, checks version.
+
+# ─── ISO & Sig file validation ────────────────────────────────────────────────
+
+- name: Verify ISO exists on control node
+  stat:
+    path: "{{ iso_image_name }}"
+  register: iso_stat
+  delegate_to: localhost
+
+- name: Fail early if ISO is not found
+  fail:
+    msg: >
+      ISO not found at '{{ iso_image_name }}' on the Ansible control node.
+      Copy it there before running this playbook.
+  when: not iso_stat.stat.exists
+
+- name: Verify ISO signature file exists on control node
+  stat:
+    path: "{{ iso_sig_name }}"
+  register: iso_sig_stat
+  delegate_to: localhost
+
+- name: Fail early if ISO signature file is not found
+  fail:
+    msg: >
+      ISO signature file not found at '{{ iso_sig_name }}' on the Ansible control node.
+      Copy it there before running this playbook.
+  when: not iso_sig_stat.stat.exists
+
+# ─── Gather BIG-IP hostname ───────────────────────────────────────────────────
+
+- name: Gather BIG-IP device info
+  bigip_device_info:
+    gather_subset:
+      - devices
+    provider: "{{ provider }}"
+  register: device_info
+
+- name: Set BIG-IP hostname fact
+  set_fact:
+    bigip_device_hostname: >-
+      {{
+        device_info.devices
+        | selectattr('self', 'equalto', 'yes')
+        | map(attribute='hostname')
+        | first
+      }}
+
+- name: Debug — BIG-IP hostname
+  debug:
+    msg: "BIG-IP hostname: {{ bigip_device_hostname }}"
+  when: debug_mode | bool

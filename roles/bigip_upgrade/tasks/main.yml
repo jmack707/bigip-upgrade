@@ -1,0 +1,53 @@
+---
+# roles/bigip_upgrade/tasks/main.yml
+# Orchestrator — delegates to phase task files.
+#
+# Run individual phases with tags:
+#   --tags preflight       ISO/sig checks, hostname gather, version check
+#   --tags backup          UCS backup (can skip with --skip-tags backup)
+#   --tags upload          Upload ISO and sig file to device
+#   --tags install         Install image to target volume (no reboot)
+#   --tags reboot          Reboot into target volume
+#   --tags verify          Post-reboot version assertion
+#
+# Common workflows:
+#   Full upgrade:
+#     ansible-playbook upgrade_bigip.yml
+#
+#   Upload and install during business hours, reboot in maintenance window:
+#     ansible-playbook upgrade_bigip.yml --tags preflight,backup,upload,install
+#     ansible-playbook upgrade_bigip.yml --tags preflight,reboot,verify
+#
+#   Skip backup during testing:
+#     ansible-playbook upgrade_bigip.yml --skip-tags backup
+
+- name: Define BIG-IP API provider
+  set_fact:
+    provider:
+      server: "{{ inventory_hostname }}"
+      user: "{{ bigip_username }}"
+      password: "{{ bigip_password }}"
+      server_port: 443
+      validate_certs: "{{ bigip_validate_certs }}"
+  tags: always
+
+- import_tasks: preflight.yml
+  tags: preflight
+
+- import_tasks: backup.yml
+  tags: backup
+
+- import_tasks: version_check.yml
+  tags: preflight
+
+- import_tasks: upload.yml
+  tags: upload
+
+- import_tasks: install.yml
+  tags: install
+
+- import_tasks: reboot.yml
+  tags: reboot
+
+- import_tasks: verify.yml
+  tags: verify

@@ -1,0 +1,18 @@
+# group_vars/bigip/vault.yml.example
+# ─────────────────────────────────────────────────────────────────────────────
+# Copy this file to vault.yml and populate with real credentials.
+# Then encrypt it with Ansible Vault before committing.
+#
+#   cp group_vars/bigip/vault.yml.example group_vars/bigip/vault.yml
+#   ansible-vault encrypt group_vars/bigip/vault.yml
+#
+# Edit in place after encryption:
+#   ansible-vault edit group_vars/bigip/vault.yml
+#
+# Run playbook with vault:
+#   ansible-playbook upgrade_bigip.yml --ask-vault-pass
+#   ansible-playbook upgrade_bigip.yml --vault-password-file ~/.vault_pass
+# ─────────────────────────────────────────────────────────────────────────────
+
+vault_bigip_username: "admin"
+vault_bigip_password: "CHANGEME"

@@ -1,0 +1,28 @@
+---
+# defaults/main.yml — override any of these in group_vars, host_vars, or --extra-vars
+
+# Set to true to enable verbose debug output during the run
+debug_mode: false
+
+# Set to false in lab/dev environments where self-signed certs are in use.
+# MUST be true in production.
+bigip_validate_certs: false
+
+# Fallback volume name when no inactive volume is found.
+# Standard BIG-IP volume naming: HD1.1, HD1.2, HD1.3
+bigip_fallback_volume: "HD1.2"
+
+# Seconds to wait before checking reachability after reboot
+bigip_reboot_delay: 120
+
+# Maximum seconds to wait for BIG-IP to return after reboot
+bigip_reboot_timeout: 2400
+
+# Local directory on the Ansible control node where UCS backups are saved.
+# Directory will be created if it does not exist.
+ucs_backup_dest: "./ucs_backups"
+
+# Seconds to wait for the async UCS create API on the BIG-IP.
+# Valid range is 150-1800. Increase for large configurations.
+ucs_async_timeout: 600
+

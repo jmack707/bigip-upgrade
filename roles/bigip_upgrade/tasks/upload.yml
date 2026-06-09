@@ -1,0 +1,37 @@
+---
+# roles/bigip_upgrade/tasks/upload.yml
+# Uploads the ISO and signature file to the BIG-IP.
+# bigip_software_image handles the ISO via iControl REST.
+# The .384.sig file is uploaded via curl due to extension restrictions in the module.
+
+- name: Ensure BIG-IP is ready before upload
+  bigip_wait:
+    provider: "{{ provider }}"
+    timeout: 300
+  delegate_to: localhost
+
+- name: Upload BIG-IP ISO image
+  bigip_software_image:
+    provider: "{{ provider }}"
+    image: "{{ iso_image_name }}"
+    state: present
+  delegate_to: localhost
+
+- name: Upload ISO signature file via iControl REST
+  shell: >
+    curl -sk -u {{ bigip_username }}:{{ bigip_password }}
+    -X POST
+    https://{{ inventory_hostname }}/mgmt/shared/file-transfer/uploads/{{ iso_sig_name | basename }}
+    -H "Content-Type: application/octet-stream"
+    -H "Content-Range: 0-{{ iso_sig_stat.stat.size - 1 }}/{{ iso_sig_stat.stat.size }}"
+    --data-binary @{{ iso_sig_name }}
+  delegate_to: localhost
+  register: sig_upload
+  no_log: true
+
+- name: Verify signature file upload succeeded
+  assert:
+    that:
+      - sig_upload.rc == 0
+    fail_msg: "Signature file upload failed."
+    success_msg: "Signature file uploaded successfully."

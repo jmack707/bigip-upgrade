@@ -1,0 +1,14 @@
+---
+# roles/bigip_upgrade/tasks/install.yml
+# Installs the software image to the target volume.
+# The device is NOT rebooted here — run the reboot tag separately
+# during your maintenance window.
+# Usage: ansible-playbook upgrade_bigip.yml --tags preflight,upload,install
+
+- name: Install software to target volume
+  bigip_software_install:
+    provider: "{{ provider }}"
+    image: "{{ iso_image_name }}"
+    volume: "{{ target_volume }}"
+    state: installed
+  delegate_to: localhost

@@ -1,0 +1,38 @@
+---
+# roles/bigip_upgrade/tasks/verify.yml
+# Waits for the BIG-IP to return after reboot and asserts the expected version
+# is now the active software volume.
+
+- name: Wait for BIG-IP to be ready after reboot
+  bigip_wait:
+    provider: "{{ provider }}"
+    delay: "{{ bigip_reboot_delay }}"
+    timeout: "{{ bigip_reboot_timeout }}"
+  delegate_to: localhost
+
+- name: Gather post-upgrade software volume information
+  bigip_device_info:
+    gather_subset:
+      - software-volumes
+    provider: "{{ provider }}"
+  register: post_upgrade_info
+
+- name: Debug — post-upgrade software volumes
+  debug:
+    var: post_upgrade_info.software_volumes
+  when: debug_mode | bool
+
+- name: Assert target version is now the active volume
+  assert:
+    that:
+      - post_upgrade_info.software_volumes
+        | selectattr('active', 'equalto', 'yes')
+        | selectattr('version', 'search', expected_version)
+        | list
+        | length > 0
+    fail_msg: >
+      Upgrade verification FAILED on {{ inventory_hostname }}.
+      Expected active version {{ expected_version }} not found.
+      Manual intervention required before proceeding.
+    success_msg: >
+      {{ inventory_hostname }} successfully upgraded to {{ expected_version }}.

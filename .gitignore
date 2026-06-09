@@ -1,0 +1,13 @@
+# Never commit unencrypted vault files
+group_vars/bigip/vault.yml
+
+# Ansible artifacts
+*.retry
+.ansible/
+
+# UCS backups
+ucs_backups/
+
+# Editor
+.vscode/
+*.swp

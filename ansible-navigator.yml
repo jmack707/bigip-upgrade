@@ -1,0 +1,26 @@
+---
+ansible-navigator:
+  ansible:
+    config:
+      path: ansible.cfg
+
+  execution-environment:
+    container-engine: docker
+    # IMPORTANT: Replace this with your own internally-hosted EE image.
+    # The default image (dialtone21/f5_cis_ee) is an unofficial third-party
+    # image unsuitable for air-gapped or federal environments.
+    #
+    # Build your own EE with ansible-builder:
+    #   1. Install: pip install ansible-builder
+    #   2. Define execution-environment.yml (see README for template)
+    #   3. Build: ansible-builder build -t your-registry/f5-ee:1.0.0
+    #   4. Push to your internal registry and reference it below
+    image: your-registry.example.com/f5-ee:1.0.0
+    pull:
+      policy: missing
+    enabled: true
+
+  mode: interactive
+
+  playbook-artifact:
+    enable: false

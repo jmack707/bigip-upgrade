@@ -1,0 +1,16 @@
+---
+# vars/bigip_upgrade_vars.yml
+# ─────────────────────────────────────────────────────────────────────────────
+# Operator-managed upgrade variables. Edit this file before each upgrade run.
+# Do NOT edit anything inside roles/ — the role is a sealed artifact.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Filename of the BIG-IP ISO on the Ansible control node.
+# Must be present before running the playbook.
+# Copy command: scp BIGIP-x.x.x.iso ubuntu@<control-node>:/path/to/bigip-upgrade/
+iso_image_name: "BIGIP-21.1.0-0.0.38.iso"
+iso_sig_name: "BIGIP-21.1.0-0.0.38.iso.384.sig"
+
+# Version string to assert post-upgrade. Must match the TMOS version field exactly.
+# Verify with: tmsh show sys software volume
+expected_version: "21.1.0"

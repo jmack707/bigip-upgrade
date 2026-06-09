@@ -1,0 +1,26 @@
+---
+# BIG-IP Software Upgrade Playbook
+# Runs serially (one device at a time) to protect HA pairs.
+# Credentials: supply via Ansible Vault (recommended) or --extra-vars.
+#   vault_bigip_username / vault_bigip_password  (preferred)
+#   --extra-vars "bigip_username=admin bigip_password=secret"  (testing only)
+
+- name: Upgrade F5 BIG-IP Appliances
+  hosts: bigip
+  gather_facts: no
+  connection: local
+  serial: 1                         # Never upgrade multiple devices simultaneously
+  max_fail_percentage: 0            # Abort the entire run on any single failure
+
+  collections:
+    - f5networks.f5_modules
+
+  vars_files:
+    - vars/bigip_upgrade_vars.yml   # iso_image_name, expected_version — edit before each run
+
+  vars:
+    bigip_username: "{{ vault_bigip_username }}"
+    bigip_password: "{{ vault_bigip_password }}"
+
+  roles:
+    - bigip_upgrade
