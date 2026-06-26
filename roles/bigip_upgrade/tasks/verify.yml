@@ -25,9 +25,11 @@
 - name: Assert target version is now the active volume
   assert:
     that:
+      # 'match' anchors at the start with a regex-escaped version so a partial
+      # leading match (e.g. 121.1.0) can't satisfy the post-upgrade assertion.
       - post_upgrade_info.software_volumes
         | selectattr('active', 'equalto', 'yes')
-        | selectattr('version', 'search', expected_version)
+        | selectattr('version', 'match', expected_version | regex_escape)
         | list
         | length > 0
     fail_msg: >

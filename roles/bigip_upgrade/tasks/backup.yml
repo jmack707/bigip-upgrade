@@ -1,15 +1,11 @@
 ---
 # roles/bigip_upgrade/tasks/backup.yml
 
-- name: Get current date for UCS filename
-  command: date +%Y-%m-%d
-  register: backup_date
-  delegate_to: localhost
-  changed_when: false
-
 - name: Set UCS filename fact
   set_fact:
-    ucs_filename: "pre-upgrade-{{ bigip_device_hostname }}-{{ backup_date.stdout }}.ucs"
+    # Date is resolved on the control node via a pipe lookup — no separate
+    # command task / registered result needed just for a timestamp.
+    ucs_filename: "pre-upgrade-{{ bigip_device_hostname }}-{{ lookup('pipe', 'date +%Y-%m-%d') }}.ucs"
 
 - name: Create local UCS backup directory
   file:

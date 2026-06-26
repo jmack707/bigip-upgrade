@@ -10,4 +10,15 @@
     commands:
       - "reboot volume {{ target_volume }}"
   delegate_to: localhost
-  ignore_errors: true
+  register: reboot_result
+  # The reboot tears down the management connection, so a connection-level
+  # error here is expected and tolerated. Anything else — auth failure, an
+  # invalid volume, a permissions problem — is a real failure and should stop
+  # the run rather than be silently swallowed by a blanket ignore_errors.
+  failed_when:
+    - reboot_result is failed
+    - "'connection' not in (reboot_result.msg | default('') | lower)"
+    - "'timed out' not in (reboot_result.msg | default('') | lower)"
+    - "'timeout' not in (reboot_result.msg | default('') | lower)"
+    - "'reset' not in (reboot_result.msg | default('') | lower)"
+    - "'unreachable' not in (reboot_result.msg | default('') | lower)"

@@ -17,11 +17,13 @@
 
 - name: Check whether target version is already active
   set_fact:
+    # 'match' anchors at the start and expected_version is regex-escaped, so
+    # "21.1.0" matches "21.1.0" (and any build suffix) but not "121.1.0".
     already_on_target: >-
       {{
         software_volumes_info.software_volumes
         | selectattr('active', 'equalto', 'yes')
-        | selectattr('version', 'search', expected_version)
+        | selectattr('version', 'match', expected_version | regex_escape)
         | list
         | length > 0
       }}
