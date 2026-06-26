@@ -2,7 +2,8 @@
 # roles/bigip_upgrade/tasks/upload.yml
 # Uploads the ISO and signature file to the BIG-IP.
 # bigip_software_image handles the ISO via iControl REST.
-# The .384.sig file is uploaded via curl due to extension restrictions in the module.
+# The .384.sig file is uploaded directly to the iControl REST file-transfer
+# endpoint because the module rejects the .sig extension.
 
 - name: Ensure BIG-IP is ready before upload
   bigip_wait:
@@ -17,14 +18,22 @@
     state: present
   delegate_to: localhost
 
+# Use the uri module rather than shelling out to curl: credentials are passed
+# via the request (not the argv, where `ps` could expose them), TLS validation
+# honours bigip_validate_certs, and there is no dependency on a curl binary.
 - name: Upload ISO signature file via iControl REST
-  shell: >
-    curl -sk -u {{ bigip_username }}:{{ bigip_password }}
-    -X POST
-    https://{{ inventory_hostname }}/mgmt/shared/file-transfer/uploads/{{ iso_sig_name | basename }}
-    -H "Content-Type: application/octet-stream"
-    -H "Content-Range: 0-{{ iso_sig_stat.stat.size - 1 }}/{{ iso_sig_stat.stat.size }}"
-    --data-binary @{{ iso_sig_name }}
+  uri:
+    url: "https://{{ inventory_hostname }}/mgmt/shared/file-transfer/uploads/{{ iso_sig_name | basename }}"
+    method: POST
+    user: "{{ bigip_username }}"
+    password: "{{ bigip_password }}"
+    force_basic_auth: true
+    headers:
+      Content-Type: "application/octet-stream"
+      Content-Range: "0-{{ iso_sig_stat.stat.size - 1 }}/{{ iso_sig_stat.stat.size }}"
+    src: "{{ iso_sig_name }}"
+    validate_certs: "{{ bigip_validate_certs }}"
+    status_code: 200
   delegate_to: localhost
   register: sig_upload
   no_log: true
@@ -32,6 +41,6 @@
 - name: Verify signature file upload succeeded
   assert:
     that:
-      - sig_upload.rc == 0
+      - sig_upload.status == 200
     fail_msg: "Signature file upload failed."
     success_msg: "Signature file uploaded successfully."

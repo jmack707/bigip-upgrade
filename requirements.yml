@@ -1,0 +1,11 @@
+---
+# Ansible collection dependencies for this playbook.
+#
+# Install on the control node:
+#   ansible-galaxy collection install -r requirements.yml
+#
+# Also consumed by ansible-builder when building the execution environment
+# (see ansible-navigator.yml and the README).
+
+collections:
+  - name: f5networks.f5_modules
