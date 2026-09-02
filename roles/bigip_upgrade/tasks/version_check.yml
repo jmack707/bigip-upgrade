@@ -1,46 +1,84 @@
 ---
 # roles/bigip_upgrade/tasks/version_check.yml
-# Checks current software volumes, skips host if already on target version,
-# and selects the target volume for the upgrade.
+# Reads the software volumes, ends the play for hosts already running the
+# target version, and selects the volume to install to / reboot into.
+#
+# Field notes (f5networks.f5_modules.bigip_device_info, software-volumes):
+#   active   'yes' / 'no' (string, despite the docs saying bool)
+#   version  version without build, e.g. 17.1.1
+#   build    build number, e.g. 0.0.2
+#   status   'complete' once an install has finished
 
 - name: Gather software volume information
-  bigip_device_info:
+  f5networks.f5_modules.bigip_device_info:
     gather_subset:
       - software-volumes
     provider: "{{ provider }}"
+  delegate_to: localhost
   register: software_volumes_info
 
 - name: Debug — all software volumes
-  debug:
+  ansible.builtin.debug:
     var: software_volumes_info.software_volumes
   when: debug_mode | bool
 
-- name: Check whether target version is already active
-  set_fact:
-    already_on_target: >-
+- name: Record the currently active volume
+  ansible.builtin.set_fact:
+    active_volume: >-
       {{
         software_volumes_info.software_volumes
         | selectattr('active', 'equalto', 'yes')
-        | selectattr('version', 'search', expected_version)
-        | list
-        | length > 0
+        | first
+      }}
+
+- name: Show current state
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }} is running {{ active_volume.version | default('unknown') }}
+      build {{ active_volume.build | default('unknown') }} on {{ active_volume.name }};
+      target is {{ expected_version }}{{ (' build ' ~ expected_build) if expected_build | length > 0 else '' }}.
+
+# Exact comparison. expected_version must equal the volume's version field
+# (no build number); expected_build is compared only when set.
+- name: Check whether the target version is already active
+  ansible.builtin.set_fact:
+    already_on_target: >-
+      {{
+        active_volume.version | default('') == expected_version
+        and (expected_build | length == 0 or active_volume.build | default('') == expected_build)
       }}
 
 - name: Skip upgrade — target version already active
-  debug:
-    msg: >
+  ansible.builtin.debug:
+    msg: >-
       {{ inventory_hostname }} is already running {{ expected_version }}.
-      Skipping upgrade.
+      Nothing to do for this host.
   when: already_on_target | bool
 
 - name: End play for this host if already on target version
-  meta: end_host
+  ansible.builtin.meta: end_host
   when: already_on_target | bool
 
-# ─── Volume selection ─────────────────────────────────────────────────────────
+# ─── Volume selection ────────────────────────────────────────────────────────
+# 1. An inactive volume that already holds the expected version with a
+#    completed install (image staged in an earlier run) is always preferred,
+#    so the maintenance-window run reboots into the volume that was installed.
+# 2. Otherwise the highest-named inactive volume.
+# 3. Otherwise (single-volume device) bigip_fallback_volume, which the install
+#    module creates.
 
-- name: Get list of inactive BIG-IP software volumes
-  set_fact:
+- name: Find inactive volumes already holding the expected version
+  ansible.builtin.set_fact:
+    staged_volumes: >-
+      {{
+        software_volumes_info.software_volumes
+        | selectattr('active', 'equalto', 'no')
+        | selectattr('version', 'defined')
+        | selectattr('version', 'equalto', expected_version)
+        | selectattr('status', 'equalto', 'complete')
+        | map(attribute='name')
+        | list
+      }}
     available_volumes: >-
       {{
         software_volumes_info.software_volumes
@@ -51,21 +89,19 @@
         | list
       }}
 
-- name: Debug — inactive volumes available
-  debug:
-    var: available_volumes
-  when: debug_mode | bool
-
 - name: Select target volume for upgrade
-  set_fact:
+  ansible.builtin.set_fact:
     target_volume: >-
       {{
-        bigip_fallback_volume
-        if available_volumes | length == 0
-        else available_volumes[0]
+        staged_volumes[0] if staged_volumes | length > 0
+        else (available_volumes[0] if available_volumes | length > 0
+              else bigip_fallback_volume)
       }}
 
-- name: Debug — selected volume
-  debug:
-    msg: "Target volume for upgrade: {{ target_volume }}"
-  when: debug_mode | bool
+- name: Show target volume
+  ansible.builtin.debug:
+    msg: >-
+      Target volume for {{ inventory_hostname }}: {{ target_volume }}
+      ({{ 'already holds ' ~ expected_version if target_volume in staged_volumes
+          else ('inactive, will be installed' if target_volume in available_volumes
+                else 'fallback, will be created') }}).

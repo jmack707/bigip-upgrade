@@ -12,8 +12,8 @@ ansible-navigator:
     #
     # Build your own EE with ansible-builder:
     #   1. Install: pip install ansible-builder
-    #   2. Define execution-environment.yml (see README for template)
-    #   3. Build: ansible-builder build -t your-registry/f5-ee:1.0.0
+    #   2. Edit ee/execution-environment.yml (base image, registry)
+    #   3. Build: ansible-builder build -f ee/execution-environment.yml -t your-registry/f5-ee:1.0.0
     #   4. Push to your internal registry and reference it below
     image: your-registry.example.com/f5-ee:1.0.0
     pull:

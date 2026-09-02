@@ -1,13 +1,65 @@
 ---
 # roles/bigip_upgrade/tasks/reboot.yml
-# Reboots the BIG-IP into the target volume and waits for it to be ready.
-# Run this separately during your maintenance window after upload/install.
-# Usage: ansible-playbook upgrade_bigip.yml --tags preflight,reboot,verify
+# Reboots the BIG-IP into the target volume. Run during the maintenance
+# window after upload/install:
+#   ansible-playbook upgrade_bigip.yml --tags preflight,reboot,verify
 
-- name: Reboot into target volume
-  bigip_command:
+- name: Ensure a target volume was selected during preflight
+  ansible.builtin.assert:
+    that:
+      - target_volume is defined
+      - target_volume | length > 0
+    fail_msg: >-
+      target_volume is not set. Include the 'preflight' tag in the same run so
+      the volume is selected first, e.g. --tags preflight,reboot,verify.
+
+- name: Gather software volumes before reboot
+  f5networks.f5_modules.bigip_device_info:
+    gather_subset:
+      - software-volumes
     provider: "{{ provider }}"
-    commands:
-      - "reboot volume {{ target_volume }}"
   delegate_to: localhost
-  ignore_errors: true
+  register: pre_reboot_info
+
+# Never reboot into a volume that does not hold a completed install of the
+# expected version (e.g. the install phase was skipped or failed).
+- name: Assert the target volume holds a completed install of the expected version
+  ansible.builtin.assert:
+    that:
+      - staged | length == 1
+      - staged[0].status == 'complete'
+      - staged[0].version == expected_version
+      - (expected_build | length == 0) or (staged[0].build == expected_build)
+    fail_msg: >-
+      Refusing to reboot {{ inventory_hostname }}: volume {{ target_volume }}
+      reports version {{ staged | map(attribute='version') | list }}
+      status {{ staged | map(attribute='status') | list }}, expected
+      {{ expected_version }} 'complete'. Run the install phase first
+      (--tags preflight,upload,install).
+    success_msg: >-
+      {{ target_volume }} on {{ inventory_hostname }} holds {{ expected_version }};
+      proceeding to reboot.
+  vars:
+    staged: >-
+      {{
+        pre_reboot_info.software_volumes
+        | selectattr('name', 'equalto', target_volume)
+        | list
+      }}
+
+- name: Record the volume that is active now (rollback target)
+  ansible.builtin.debug:
+    msg: >-
+      Rollback target for {{ inventory_hostname }} is
+      {{ (pre_reboot_info.software_volumes | selectattr('active', 'equalto', 'yes') | first).name }}
+      (use: --tags rollback -e rollback_volume=<that volume>).
+
+- name: Check HA state and refuse to reboot an active member
+  ansible.builtin.import_tasks: ha_interlock.yml
+
+- name: Set boot volume
+  ansible.builtin.set_fact:
+    bigip_boot_volume: "{{ target_volume }}"
+
+- name: Reboot into the target volume
+  ansible.builtin.import_tasks: reboot_into_volume.yml

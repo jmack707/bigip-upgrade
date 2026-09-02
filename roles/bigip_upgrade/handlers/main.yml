@@ -1,4 +1,4 @@
 ---
 # handlers/main.yml
-# Reboot is handled explicitly via the bash endpoint in tasks/main.yml.
-# This file is intentionally minimal.
+# Reboots are orchestrated explicitly in tasks/reboot_into_volume.yml so the
+# HA interlock and verification always run around them. No handlers.

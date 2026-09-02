@@ -1,38 +1,60 @@
 ---
 # roles/bigip_upgrade/tasks/verify.yml
-# Waits for the BIG-IP to return after reboot and asserts the expected version
-# is now the active software volume.
+# Waits for the BIG-IP to return after the reboot, asserts the expected
+# version is the active volume, and prints a per-device summary.
 
+# bigip_wait returns once the REST API answers and module provisioning
+# (mprov) is no longer running, i.e. the device is ready for configuration.
 - name: Wait for BIG-IP to be ready after reboot
-  bigip_wait:
+  f5networks.f5_modules.bigip_wait:
     provider: "{{ provider }}"
     delay: "{{ bigip_reboot_delay }}"
     timeout: "{{ bigip_reboot_timeout }}"
   delegate_to: localhost
 
-- name: Gather post-upgrade software volume information
-  bigip_device_info:
+- name: Gather post-upgrade state
+  f5networks.f5_modules.bigip_device_info:
     gather_subset:
       - software-volumes
+      - devices
+      - sync-status
     provider: "{{ provider }}"
+  delegate_to: localhost
   register: post_upgrade_info
 
 - name: Debug — post-upgrade software volumes
-  debug:
+  ansible.builtin.debug:
     var: post_upgrade_info.software_volumes
   when: debug_mode | bool
 
-- name: Assert target version is now the active volume
-  assert:
+- name: Set post-upgrade facts
+  ansible.builtin.set_fact:
+    post_active_volume: "{{ post_upgrade_info.software_volumes | selectattr('active', 'equalto', 'yes') | first }}"
+    post_self_device: "{{ post_upgrade_info.devices | selectattr('self', 'equalto', 'yes') | first }}"
+    post_sync: "{{ post_upgrade_info.sync_status | first }}"
+
+- name: Assert the expected version is now the active volume
+  ansible.builtin.assert:
     that:
-      - post_upgrade_info.software_volumes
-        | selectattr('active', 'equalto', 'yes')
-        | selectattr('version', 'search', expected_version)
-        | list
-        | length > 0
-    fail_msg: >
-      Upgrade verification FAILED on {{ inventory_hostname }}.
-      Expected active version {{ expected_version }} not found.
-      Manual intervention required before proceeding.
-    success_msg: >
-      {{ inventory_hostname }} successfully upgraded to {{ expected_version }}.
+      - post_active_volume.version | default('') == expected_version
+      - (expected_build | length == 0) or (post_active_volume.build | default('') == expected_build)
+    fail_msg: >-
+      Upgrade verification FAILED on {{ inventory_hostname }}: active volume is
+      {{ post_active_volume.name }} running {{ post_active_volume.version | default('unknown') }}
+      build {{ post_active_volume.build | default('unknown') }}, expected
+      {{ expected_version }}{{ (' build ' ~ expected_build) if expected_build | length > 0 else '' }}.
+      The run has stopped; no further devices will be touched. See
+      docs/OPERATIONS.md (Rollback) before proceeding.
+    success_msg: >-
+      {{ inventory_hostname }} is running {{ expected_version }} on {{ post_active_volume.name }}.
+
+- name: Post-upgrade summary
+  ansible.builtin.debug:
+    msg:
+      - "device:          {{ post_self_device.hostname }} ({{ inventory_hostname }})"
+      - "active volume:   {{ post_active_volume.name }}"
+      - "version/build:   {{ post_active_volume.version | default('unknown') }} / {{ post_active_volume.build | default('unknown') }}"
+      - "failover state:  {{ post_self_device.failover_state | default('unknown') }}"
+      - "ha mode:         {{ post_sync.mode | default('unknown') }}"
+      - "sync status:     {{ post_sync.status | default('unknown') }} ({{ post_sync.color | default('n/a') }})"
+      - "next action:     {{ post_sync.recommended_action | default('none') }}"

@@ -1,0 +1,22 @@
+---
+# ee/execution-environment.yml
+# ansible-builder definition for a self-contained execution environment that
+# runs this playbook (ansible-navigator, AAP/AWX). Build from the repo root:
+#
+#   pip install ansible-builder
+#   ansible-builder build -f ee/execution-environment.yml \
+#       -t your-registry.example.com/f5-ee:1.0.0 --container-runtime docker
+#   docker push your-registry.example.com/f5-ee:1.0.0
+#
+# Then set execution-environment.image in ansible-navigator.yml.
+version: 3
+
+images:
+  base_image:
+    # Replace with the base image approved for your environment
+    # (e.g. an internally mirrored ansible-core image).
+    name: quay.io/ansible/creator-ee:latest
+
+dependencies:
+  galaxy: ../requirements.yml
+  python: requirements.txt

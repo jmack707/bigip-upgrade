@@ -1,28 +1,94 @@
 ---
-# defaults/main.yml — override any of these in group_vars, host_vars, or --extra-vars
+# roles/bigip_upgrade/defaults/main.yml
+# Tunable defaults. Override in group_vars, host_vars, or --extra-vars.
+# These names are the role's public interface for operators; do not rename.
 
-# Set to true to enable verbose debug output during the run
+# ─── Output ──────────────────────────────────────────────────────────────────
+# Print gathered volume/device data during the run.
 debug_mode: false
 
-# Set to false in lab/dev environments where self-signed certs are in use.
-# MUST be true in production.
+# ─── Connection ──────────────────────────────────────────────────────────────
+# Validate the BIG-IP management TLS certificate. Set to false only where
+# self-signed certificates are in use (lab). MUST be true in production.
 bigip_validate_certs: false
 
-# Fallback volume name when no inactive volume is found.
-# Standard BIG-IP volume naming: HD1.1, HD1.2, HD1.3
+# iControl REST management port.
+bigip_server_port: 443
+
+# Seconds the F5 modules wait for a single REST request before failing.
+# Raise this on devices where 'save sys config' or UCS creation is slow.
+bigip_api_timeout: 120
+
+# ─── Upload ──────────────────────────────────────────────────────────────────
+# Seconds to wait for the device to be ready before uploading the image.
+bigip_upload_wait_timeout: 300
+
+# iControl REST path the ISO signature (.384.sig) is uploaded to. The default
+# is the same endpoint the F5 collection uses for ISO uploads, which stores
+# files in /shared/images next to the ISO (where BIG-IP looks for the .sig).
+bigip_sig_upload_path: "/mgmt/cm/autodeploy/software-image-uploads"
+
+# After upload, require the BIG-IP to report the image as 'verified' (its own
+# signature check) before installing. Set to false only after confirming the
+# image manually: tmsh show sys software image
+bigip_require_verified_image: true
+
+# ─── Install ─────────────────────────────────────────────────────────────────
+# Volume created and installed to when the device has no inactive volume
+# (single-volume devices). Standard naming: HD1.1, HD1.2, HD1.3
 bigip_fallback_volume: "HD1.2"
 
-# Seconds to wait before checking reachability after reboot
+# ─── Reboot / HA ─────────────────────────────────────────────────────────────
+# In an HA device group, rebooting the ACTIVE unit interrupts traffic. The
+# reboot phase refuses to reboot an active unit unless one of these is set.
+#   bigip_auto_failover: true        run 'sys failover standby' on the unit
+#                                    first and wait until it reports standby
+#   bigip_allow_active_reboot: true  bypass the interlock (traffic impact)
+# Standalone devices (sync-status mode 'standalone') are not subject to
+# the interlock; they always report 'active'.
+bigip_auto_failover: false
+bigip_allow_active_reboot: false
+
+# How long to wait for the unit to leave the 'active' state after
+# bigip_auto_failover issues the failover (retries x delay seconds).
+bigip_failover_wait_retries: 12
+bigip_failover_wait_delay: 5
+
+# After issuing the reboot, wait up to this many seconds for the management
+# port to stop answering. Proves the reboot actually started; a reboot command
+# that was silently rejected is caught here instead of hours later.
+# Set to 0 to disable.
+bigip_reboot_detect_timeout: 300
+
+# ─── Verify ──────────────────────────────────────────────────────────────────
+# Seconds to wait before polling for the device after the reboot.
 bigip_reboot_delay: 120
 
-# Maximum seconds to wait for BIG-IP to return after reboot
+# Maximum seconds to wait for the device to return after the reboot.
 bigip_reboot_timeout: 2400
 
-# Local directory on the Ansible control node where UCS backups are saved.
-# Directory will be created if it does not exist.
+# ─── Backup ──────────────────────────────────────────────────────────────────
+# Directory on the control node where UCS backups are saved
+# (<ucs_backup_dest>/<device hostname>/<file>.ucs). Created if missing.
 ucs_backup_dest: "./ucs_backups"
 
-# Seconds to wait for the async UCS create API on the BIG-IP.
-# Valid range is 150-1800. Increase for large configurations.
+# Seconds to wait for the asynchronous UCS create API on the BIG-IP.
+# Valid range 150-1800 (F5 collection). Increase for large configurations.
 ucs_async_timeout: 600
 
+# Run 'tmsh save sys config' before creating the UCS so unsaved running
+# configuration is captured in the archive.
+ucs_save_config_first: true
+
+# Optional passphrase to encrypt the UCS archive. Leave empty for no encryption.
+# Keep this in the vault file if you set it.
+ucs_encryption_password: ""
+
+# Delete the UCS from the device (/var/local/ucs) once it has been fetched
+# and verified on the control node, to avoid filling the device's disk.
+ucs_remove_from_device: false
+
+# ─── Optional exact build match ──────────────────────────────────────────────
+# When set (e.g. "0.0.38"), the already-on-target check and the post-reboot
+# assertion also require the build to match, not just the version.
+expected_build: ""

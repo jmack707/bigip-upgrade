@@ -1,55 +1,88 @@
 ---
 # roles/bigip_upgrade/tasks/preflight.yml
-# Validates local files, gathers device hostname, checks version.
+# Validates operator input and local files, then gathers device identity.
+# Nothing here changes the device.
 
-# ─── ISO & Sig file validation ────────────────────────────────────────────────
+# ─── Operator input ──────────────────────────────────────────────────────────
 
-- name: Verify ISO exists on control node
-  stat:
+- name: Validate required operator variables
+  ansible.builtin.assert:
+    that:
+      - iso_image_name is defined and iso_image_name | length > 0
+      - iso_sig_name is defined and iso_sig_name | length > 0
+      - expected_version is defined
+      - 'expected_version | string is match("^[0-9]+\.[0-9]+\.[0-9]+$")'
+      - 'expected_build | string | length == 0 or expected_build | string is match("^[0-9]+\.[0-9]+\.[0-9]+$")'
+    fail_msg: >-
+      Set iso_image_name, iso_sig_name and expected_version in
+      vars/bigip_upgrade_vars.yml. expected_version is the version without
+      the build number (e.g. 17.1.1); expected_build, if set, is the build
+      only (e.g. 0.0.2).
+
+# ─── ISO and signature files on the control node ────────────────────────────
+
+- name: Stat ISO on control node
+  ansible.builtin.stat:
     path: "{{ iso_image_name }}"
+    get_checksum: false   # multi-GB file; hashing it here is slow and unnecessary
   register: iso_stat
   delegate_to: localhost
 
-- name: Fail early if ISO is not found
-  fail:
-    msg: >
-      ISO not found at '{{ iso_image_name }}' on the Ansible control node.
-      Copy it there before running this playbook.
-  when: not iso_stat.stat.exists
-
-- name: Verify ISO signature file exists on control node
-  stat:
+- name: Stat ISO signature file on control node
+  ansible.builtin.stat:
     path: "{{ iso_sig_name }}"
+    get_checksum: false
   register: iso_sig_stat
   delegate_to: localhost
 
-- name: Fail early if ISO signature file is not found
-  fail:
-    msg: >
-      ISO signature file not found at '{{ iso_sig_name }}' on the Ansible control node.
-      Copy it there before running this playbook.
-  when: not iso_sig_stat.stat.exists
+- name: Validate ISO and signature files
+  ansible.builtin.assert:
+    that:
+      - iso_stat.stat.exists
+      - iso_stat.stat.isreg
+      - iso_image_name | basename is match('.*\.iso$')
+      - iso_sig_stat.stat.exists
+      - iso_sig_stat.stat.isreg
+      - iso_sig_stat.stat.size > 0
+      - iso_sig_stat.stat.size < 1048576
+      - iso_sig_name | basename == (iso_image_name | basename) ~ '.384.sig'
+    fail_msg: >-
+      ISO/signature check failed on the control node.
+      ISO '{{ iso_image_name }}' exists: {{ iso_stat.stat.exists }};
+      signature '{{ iso_sig_name }}' exists: {{ iso_sig_stat.stat.exists }}.
+      Both files must be present, the ISO must end in .iso, and the signature
+      must be named exactly '<ISO filename>.384.sig' as downloaded from F5
+      (BIG-IP looks for that name when verifying the image).
 
-# ─── Gather BIG-IP hostname ───────────────────────────────────────────────────
+# ─── Device identity and HA membership ──────────────────────────────────────
+# Field notes (bigip_device_info):
+#   devices[].self            'yes' for the device the API answered from
+#   devices[].failover_state  active | standby | forced-offline | offline
+#   sync_status[0].mode       high-availability | standalone
 
-- name: Gather BIG-IP device info
-  bigip_device_info:
+- name: Gather device identity and HA state
+  f5networks.f5_modules.bigip_device_info:
     gather_subset:
       - devices
+      - sync-status
     provider: "{{ provider }}"
+  delegate_to: localhost
   register: device_info
 
-- name: Set BIG-IP hostname fact
-  set_fact:
-    bigip_device_hostname: >-
-      {{
-        device_info.devices
-        | selectattr('self', 'equalto', 'yes')
-        | map(attribute='hostname')
-        | first
-      }}
+- name: Set device identity facts
+  ansible.builtin.set_fact:
+    bigip_self_device: "{{ device_info.devices | selectattr('self', 'equalto', 'yes') | first }}"
+    bigip_ha_mode: "{{ (device_info.sync_status | first).mode | default('unknown') }}"
 
-- name: Debug — BIG-IP hostname
-  debug:
-    msg: "BIG-IP hostname: {{ bigip_device_hostname }}"
-  when: debug_mode | bool
+- name: Set BIG-IP hostname fact
+  ansible.builtin.set_fact:
+    bigip_device_hostname: "{{ bigip_self_device.hostname }}"
+
+- name: Show device identity
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: hostname {{ bigip_device_hostname }},
+      platform {{ bigip_self_device.marketing_name | default('unknown') }},
+      mode {{ bigip_ha_mode }},
+      failover state {{ bigip_self_device.failover_state | default('unknown') }},
+      sync status {{ (device_info.sync_status | first).status | default('unknown') }}.

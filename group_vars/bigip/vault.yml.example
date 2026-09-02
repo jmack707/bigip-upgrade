@@ -16,3 +16,8 @@
 
 vault_bigip_username: "admin"
 vault_bigip_password: "CHANGEME"
+
+# Optional: passphrase used to encrypt UCS backups (see ucs_encryption_password).
+# Uncomment and reference it from group_vars, e.g.
+#   ucs_encryption_password: "{{ vault_ucs_encryption_password }}"
+# vault_ucs_encryption_password: "CHANGEME"

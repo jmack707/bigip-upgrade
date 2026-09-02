@@ -1,0 +1,8 @@
+# ee/requirements.txt
+# Python dependencies of the f5networks.f5_modules collection
+# (from the collection's own requirements.txt).
+cryptography
+objectpath
+ordereddict
+simplejson
+packaging

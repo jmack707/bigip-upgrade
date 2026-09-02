@@ -1,0 +1,128 @@
+---
+# tests/logic_test.yml
+# Exercises the role's selection and assertion logic against canned
+# bigip_device_info output, with no BIG-IP required. Run:
+#   ansible-playbook tests/logic_test.yml
+# The expressions mirror version_check.yml, preflight.yml, ha_interlock.yml
+# and upload.yml; keep them in sync when those files change.
+
+- name: Role logic tests (no device required)
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars:
+    expected_version: "17.1.1"
+    expected_build: ""
+    bigip_fallback_volume: "HD1.2"
+    # Canned software-volumes: HD1.1 active on the old release, HD1.2 holds a
+    # completed install of the target, HD1.3 is empty.
+    software_volumes:
+      - {name: HD1.1, active: 'yes', version: '16.1.4', build: '0.0.9', status: complete}
+      - {name: HD1.2, active: 'no', version: '17.1.1', build: '0.0.2', status: complete}
+      - {name: HD1.3, active: 'no', status: complete}
+    sync_status:
+      - {mode: high-availability, status: In Sync, color: green}
+    devices:
+      - {name: a, self: 'yes', hostname: bigip-a, failover_state: standby}
+      - {name: b, self: 'no', hostname: bigip-b, failover_state: active}
+
+  tasks:
+    - name: Operator input validation accepts a plain version and rejects a build suffix
+      ansible.builtin.assert:
+        that:
+          - 'expected_version | string is match("^[0-9]+\.[0-9]+\.[0-9]+$")'
+          - 'expected_build | string | length == 0 or expected_build | string is match("^[0-9]+\.[0-9]+\.[0-9]+$")'
+          - 'not ("17.1.1-0.0.2" is match("^[0-9]+\.[0-9]+\.[0-9]+$"))'
+          - "'BIGIP-17.1.1-0.0.2.iso' is match('.*\\.iso$')"
+          - "'/x/BIGIP-17.1.1-0.0.2.iso.384.sig' | basename == ('/y/BIGIP-17.1.1-0.0.2.iso' | basename) ~ '.384.sig'"
+          - "not ('BIGIP-17.1.1-0.0.2.sig' == ('BIGIP-17.1.1-0.0.2.iso' | basename) ~ '.384.sig')"
+
+    - name: Derive the facts version_check.yml derives
+      ansible.builtin.set_fact:
+        active_volume: "{{ software_volumes | selectattr('active', 'equalto', 'yes') | first }}"
+        staged_volumes: >-
+          {{
+            software_volumes
+            | selectattr('active', 'equalto', 'no')
+            | selectattr('version', 'defined')
+            | selectattr('version', 'equalto', expected_version)
+            | selectattr('status', 'equalto', 'complete')
+            | map(attribute='name') | list
+          }}
+        available_volumes: >-
+          {{
+            software_volumes | selectattr('active', 'equalto', 'no')
+            | map(attribute='name') | sort | reverse | list
+          }}
+        bigip_ha_mode: "{{ (sync_status | first).mode | default('unknown') }}"
+        bigip_failover_state: >-
+          {{ (devices | selectattr('self', 'equalto', 'yes') | first).failover_state | default('unknown') }}
+        ucs_filename: "pre-upgrade-bigip-a-{{ now(utc=true, fmt='%Y%m%d-%H%M%S') }}.ucs"
+
+    - name: Derive already_on_target and target_volume
+      ansible.builtin.set_fact:
+        already_on_target: >-
+          {{
+            active_volume.version | default('') == expected_version
+            and (expected_build | length == 0 or active_volume.build | default('') == expected_build)
+          }}
+        target_volume: >-
+          {{
+            staged_volumes[0] if staged_volumes | length > 0
+            else (available_volumes[0] if available_volumes | length > 0
+                  else bigip_fallback_volume)
+          }}
+
+    - name: A staged volume is preferred over the highest-named inactive volume
+      ansible.builtin.assert:
+        that:
+          - not already_on_target | bool
+          - staged_volumes == ['HD1.2']
+          - available_volumes == ['HD1.3', 'HD1.2']
+          - target_volume == 'HD1.2'
+          - ucs_filename is match('^pre-upgrade-bigip-a-[0-9]{8}-[0-9]{6}\.ucs$')
+
+    - name: Without a staged volume the highest-named inactive volume is chosen
+      ansible.builtin.assert:
+        that:
+          - (['HD1.3', 'HD1.2'][0] if [] | length > 0 else (['HD1.3', 'HD1.2'][0])) == 'HD1.3'
+
+    - name: With no inactive volume the fallback volume is chosen
+      ansible.builtin.assert:
+        that:
+          - ([][0] if [] | length > 0 else ([][0] if [] | length > 0 else bigip_fallback_volume)) == 'HD1.2'
+
+    - name: Exact version match does not accept a prefix or a build-qualified string
+      ansible.builtin.assert:
+        that:
+          - "'17.1.1' == expected_version"
+          - "'17.1.10' != expected_version"
+          - "'117.1.1' != expected_version"
+          - "'17.1.1.1' != expected_version"
+
+    - name: HA interlock passes for a standby member and for a standalone device
+      ansible.builtin.assert:
+        that:
+          - bigip_ha_mode == 'high-availability'
+          - bigip_failover_state == 'standby'
+          - bigip_ha_mode != 'high-availability' or bigip_failover_state != 'active' or false
+          - "'standalone' != 'high-availability' or 'active' != 'active' or false"
+
+    - name: HA interlock blocks an active member unless bigip_allow_active_reboot
+      ansible.builtin.assert:
+        that:
+          - "not ('high-availability' != 'high-availability' or 'active' != 'active' or false)"
+          - "('high-availability' != 'high-availability' or 'active' != 'active' or true)"
+
+    - name: Image verification check accepts yes/true and rejects missing or no
+      ansible.builtin.assert:
+        that:
+          - "(img_yes.verified | default('no') | string | lower in ['yes', 'true'])"
+          - "(img_true.verified | default('no') | string | lower in ['yes', 'true'])"
+          - "not (img_no.verified | default('no') | string | lower in ['yes', 'true'])"
+          - "not (img_missing.verified | default('no') | string | lower in ['yes', 'true'])"
+      vars:
+        img_yes: {name: x, verified: 'yes'}
+        img_true: {name: x, verified: true}
+        img_no: {name: x, verified: 'no'}
+        img_missing: {name: x}

@@ -1,14 +1,61 @@
 ---
 # roles/bigip_upgrade/tasks/install.yml
-# Installs the software image to the target volume.
-# The device is NOT rebooted here — run the reboot tag separately
-# during your maintenance window.
+# Installs the software image to the target volume. The device is NOT rebooted
+# here; run the reboot phase during the maintenance window.
 # Usage: ansible-playbook upgrade_bigip.yml --tags preflight,upload,install
 
-- name: Install software to target volume
-  bigip_software_install:
+- name: Ensure a target volume was selected during preflight
+  ansible.builtin.assert:
+    that:
+      - target_volume is defined
+      - target_volume | length > 0
+    fail_msg: >-
+      target_volume is not set. Include the 'preflight' tag in the same run so
+      the volume is selected first, e.g. --tags preflight,install.
+
+# state=installed: installs and marks the volume bootable, no reboot.
+# The module polls the volume until status is 'complete' and fails on
+# 'failed'. It is idempotent: if the volume already holds this image's
+# version and build it reports no change.
+- name: Install software to target volume (no reboot)
+  f5networks.f5_modules.bigip_software_install:
     provider: "{{ provider }}"
-    image: "{{ iso_image_name }}"
+    image: "{{ iso_image_name | basename }}"
     volume: "{{ target_volume }}"
     state: installed
   delegate_to: localhost
+
+- name: Gather software volumes after install
+  f5networks.f5_modules.bigip_device_info:
+    gather_subset:
+      - software-volumes
+    provider: "{{ provider }}"
+  delegate_to: localhost
+  register: post_install_info
+
+# Catches an ISO / expected_version mismatch now, before any reboot.
+- name: Assert the target volume now holds the expected version
+  ansible.builtin.assert:
+    that:
+      - installed | length == 1
+      - installed[0].status == 'complete'
+      - installed[0].version == expected_version
+      - (expected_build | length == 0) or (installed[0].build == expected_build)
+    fail_msg: >-
+      Install check FAILED on {{ inventory_hostname }}: volume {{ target_volume }}
+      reports {{ installed | map(attribute='version') | list }}
+      build {{ installed | map(attribute='build') | list }}
+      status {{ installed | map(attribute='status') | list }},
+      expected {{ expected_version }}{{ (' build ' ~ expected_build) if expected_build | length > 0 else '' }}.
+      Check that iso_image_name and expected_version in vars/bigip_upgrade_vars.yml
+      describe the same release.
+    success_msg: >-
+      {{ inventory_hostname }}: {{ expected_version }} installed to
+      {{ target_volume }} (not yet active).
+  vars:
+    installed: >-
+      {{
+        post_install_info.software_volumes
+        | selectattr('name', 'equalto', target_volume)
+        | list
+      }}
