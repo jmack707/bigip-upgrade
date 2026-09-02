@@ -1,0 +1,87 @@
+---
+# roles/bigip_upgrade/tasks/rollback.yml
+# Reboots the device into a previously installed volume. Never runs as part
+# of a normal upgrade; it must be requested explicitly:
+#   ansible-playbook upgrade_bigip.yml --tags rollback -e rollback_volume=HD1.1
+# Self-contained: does not depend on facts from the preflight phase.
+
+- name: Ensure a rollback volume was given
+  ansible.builtin.assert:
+    that:
+      - rollback_volume is defined
+      - rollback_volume | length > 0
+    fail_msg: >-
+      Set the volume to boot into, e.g.
+      --tags rollback -e rollback_volume=HD1.1
+      (list volumes with: tmsh show sys software volume).
+
+- name: Gather software volumes
+  f5networks.f5_modules.bigip_device_info:
+    gather_subset:
+      - software-volumes
+    provider: "{{ provider }}"
+  delegate_to: localhost
+  register: rollback_info
+
+- name: Assert the rollback volume exists, is inactive, and holds a completed install
+  ansible.builtin.assert:
+    that:
+      - candidate | length == 1
+      - candidate[0].active == 'no'
+      - candidate[0].status == 'complete'
+    fail_msg: >-
+      Cannot roll back {{ inventory_hostname }} to {{ rollback_volume }}:
+      found {{ candidate | length }} matching volume(s) with
+      active {{ candidate | map(attribute='active') | list }},
+      status {{ candidate | map(attribute='status') | list }}.
+      Available volumes:
+      {{ rollback_info.software_volumes | map(attribute='name') | list }}.
+    success_msg: >-
+      Rolling {{ inventory_hostname }} back to {{ rollback_volume }}
+      ({{ candidate[0].version | default('unknown') }} build {{ candidate[0].build | default('unknown') }}).
+  vars:
+    candidate: >-
+      {{
+        rollback_info.software_volumes
+        | selectattr('name', 'equalto', rollback_volume)
+        | list
+      }}
+
+- name: Check HA state and refuse to reboot an active member
+  ansible.builtin.import_tasks: ha_interlock.yml
+
+- name: Set boot volume
+  ansible.builtin.set_fact:
+    bigip_boot_volume: "{{ rollback_volume }}"
+
+- name: Reboot into the rollback volume
+  ansible.builtin.import_tasks: reboot_into_volume.yml
+
+- name: Wait for BIG-IP to be ready after rollback reboot
+  f5networks.f5_modules.bigip_wait:
+    provider: "{{ provider }}"
+    delay: "{{ bigip_reboot_delay }}"
+    timeout: "{{ bigip_reboot_timeout }}"
+  delegate_to: localhost
+
+- name: Gather software volumes after rollback
+  f5networks.f5_modules.bigip_device_info:
+    gather_subset:
+      - software-volumes
+    provider: "{{ provider }}"
+  delegate_to: localhost
+  register: post_rollback_info
+
+- name: Assert the rollback volume is now active
+  ansible.builtin.assert:
+    that:
+      - post_active.name == rollback_volume
+    fail_msg: >-
+      Rollback verification FAILED on {{ inventory_hostname }}: active volume is
+      {{ post_active.name }} ({{ post_active.version | default('unknown') }}),
+      expected {{ rollback_volume }}. Manual intervention required.
+    success_msg: >-
+      {{ inventory_hostname }} rolled back: {{ post_active.name }} is active,
+      running {{ post_active.version | default('unknown') }} build {{ post_active.build | default('unknown') }}.
+  vars:
+    post_active: "{{ post_rollback_info.software_volumes | selectattr('active', 'equalto', 'yes') | first }}"

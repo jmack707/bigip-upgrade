@@ -1,53 +1,67 @@
 ---
 # roles/bigip_upgrade/tasks/main.yml
-# Orchestrator — delegates to phase task files.
+# Orchestrator. Each phase is a tagged import. See README.md for workflows.
 #
-# Run individual phases with tags:
-#   --tags preflight       ISO/sig checks, hostname gather, version check
-#   --tags backup          UCS backup (can skip with --skip-tags backup)
-#   --tags upload          Upload ISO and sig file to device
-#   --tags install         Install image to target volume (no reboot)
-#   --tags reboot          Reboot into target volume
-#   --tags verify          Post-reboot version assertion
+#   preflight   validate inputs, ISO/sig files, device identity,
+#               already-on-target check, target volume selection
+#   backup      save config, create UCS on device, fetch and verify locally
+#   upload      upload signature then ISO, require the device to report the
+#               image as verified
+#   install     install image to target volume (no reboot), confirm version
+#   reboot      HA interlock, reboot into target volume, confirm it went down
+#   verify      wait for the device, assert active version, print summary
+#   rollback    only runs when explicitly requested (--tags rollback):
+#               reboot into rollback_volume and verify
 #
 # Common workflows:
-#   Full upgrade:
-#     ansible-playbook upgrade_bigip.yml
-#
-#   Upload and install during business hours, reboot in maintenance window:
-#     ansible-playbook upgrade_bigip.yml --tags preflight,backup,upload,install
-#     ansible-playbook upgrade_bigip.yml --tags preflight,reboot,verify
-#
-#   Skip backup during testing:
-#     ansible-playbook upgrade_bigip.yml --skip-tags backup
+#   Full upgrade:                 ansible-playbook upgrade_bigip.yml
+#   Stage during business hours:  --tags preflight,backup,upload,install
+#   Maintenance window:           --tags preflight,reboot,verify
+#   Roll back:                    --tags rollback -e rollback_volume=HD1.1
 
 - name: Define BIG-IP API provider
-  set_fact:
+  ansible.builtin.set_fact:
+    bigip_mgmt_host: "{{ ansible_host | default(inventory_hostname) }}"
     provider:
-      server: "{{ inventory_hostname }}"
+      server: "{{ ansible_host | default(inventory_hostname) }}"
+      server_port: "{{ bigip_server_port }}"
       user: "{{ bigip_username }}"
       password: "{{ bigip_password }}"
-      server_port: 443
       validate_certs: "{{ bigip_validate_certs }}"
+      timeout: "{{ bigip_api_timeout }}"
+  no_log: true   # the fact carries the password; keep it out of -v output
   tags: always
 
-- import_tasks: preflight.yml
+- name: Run pre-flight checks
+  ansible.builtin.import_tasks: preflight.yml
   tags: preflight
 
-- import_tasks: backup.yml
+- name: Check current version and select target volume
+  ansible.builtin.import_tasks: version_check.yml
+  tags: preflight
+
+- name: Back up device configuration
+  ansible.builtin.import_tasks: backup.yml
   tags: backup
 
-- import_tasks: version_check.yml
-  tags: preflight
-
-- import_tasks: upload.yml
+- name: Upload image and signature to device
+  ansible.builtin.import_tasks: upload.yml
   tags: upload
 
-- import_tasks: install.yml
+- name: Install image to target volume
+  ansible.builtin.import_tasks: install.yml
   tags: install
 
-- import_tasks: reboot.yml
+- name: Reboot into target volume
+  ansible.builtin.import_tasks: reboot.yml
   tags: reboot
 
-- import_tasks: verify.yml
+- name: Verify active version after reboot
+  ansible.builtin.import_tasks: verify.yml
   tags: verify
+
+- name: Roll back to a previous volume (explicit request only)
+  ansible.builtin.import_tasks: rollback.yml
+  tags:
+    - rollback
+    - never

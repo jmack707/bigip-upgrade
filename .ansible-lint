@@ -1,0 +1,10 @@
+---
+# ansible-lint configuration. Run: ansible-lint
+profile: production
+
+skip_list:
+  # The role's variables (debug_mode, bigip_*, ucs_*, expected_*) are the
+  # documented operator interface (README "Variables"). Renaming them to a
+  # bigip_upgrade_ prefix would break every existing group_vars/host_vars
+  # override, so the rule is skipped deliberately.
+  - var-naming[no-role-prefix]

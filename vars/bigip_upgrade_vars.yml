@@ -1,16 +1,22 @@
 ---
 # vars/bigip_upgrade_vars.yml
-# ─────────────────────────────────────────────────────────────────────────────
-# Operator-managed upgrade variables. Edit this file before each upgrade run.
-# Do NOT edit anything inside roles/ — the role is a sealed artifact.
-# ─────────────────────────────────────────────────────────────────────────────
+# Operator-managed upgrade variables. Edit before each upgrade run.
+# Tunables (timeouts, HA behaviour, backup options) live in
+# roles/bigip_upgrade/defaults/main.yml and are overridden in group_vars,
+# host_vars or with --extra-vars; do not edit the role itself.
 
-# Filename of the BIG-IP ISO on the Ansible control node.
-# Must be present before running the playbook.
-# Copy command: scp BIGIP-x.x.x.iso ubuntu@<control-node>:/path/to/bigip-upgrade/
-iso_image_name: "BIGIP-21.1.0-0.0.38.iso"
-iso_sig_name: "BIGIP-21.1.0-0.0.38.iso.384.sig"
+# BIG-IP ISO and its signature on the Ansible control node. A bare filename is
+# relative to the playbook directory; absolute paths are fine too.
+# The signature must be named exactly '<ISO filename>.384.sig' as downloaded
+# from https://my.f5.com/ (BIG-IP looks for that name when verifying).
+iso_image_name: "BIGIP-17.1.1-0.0.2.iso"
+iso_sig_name: "BIGIP-17.1.1-0.0.2.iso.384.sig"
 
-# Version string to assert post-upgrade. Must match the TMOS version field exactly.
-# Verify with: tmsh show sys software volume
-expected_version: "21.1.0"
+# Version the play expects to be active after the reboot. Must equal the
+# 'version' field of the software volume exactly, WITHOUT the build number.
+# Check with: tmsh show sys software volume
+expected_version: "17.1.1"
+
+# Optional: also require this exact build (the part after the version in the
+# ISO filename). Leave empty to accept any build of expected_version.
+# expected_build: "0.0.2"

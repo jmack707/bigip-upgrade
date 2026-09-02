@@ -1,300 +1,254 @@
-# Ansible BIG-IP Upgrade Automation
+# BIG-IP Software Upgrade Automation
 
-Automated, HA-safe BIG-IP software upgrades using the `f5networks.f5_modules` Ansible collection.
+Automated, HA-aware F5 BIG-IP software upgrades with Ansible and the
+`f5networks.f5_modules` collection.
+
+One playbook, one role, six tagged phases. Every phase checks its
+preconditions and stops the run at the first problem, so a device is never
+rebooted into a volume that does not hold the expected release, and the
+active member of an HA pair is never rebooted by accident.
+
+| Document | Audience | Content |
+|---|---|---|
+| This README | Everyone | What it does, requirements, quick start, variables |
+| [docs/OPERATIONS.md](docs/OPERATIONS.md) | Operators | Runbook: pre-checks, standalone and HA procedures, rollback, troubleshooting |
+| [docs/ENGINEERING.md](docs/ENGINEERING.md) | Engineers | Design, module behaviour verified from source, assumptions to validate, limitations |
 
 ---
 
-## What's in this repo
+## What the play guarantees
+
+- **Backup before change.** A UCS archive is created on the device, fetched
+  to the control node and checked to be non-empty before anything is
+  uploaded or installed.
+- **Verified image.** The ISO signature (`.384.sig`) is uploaded next to the
+  ISO and the play requires the BIG-IP to report the image as *verified*
+  before installing (fail-closed; can be relaxed per run).
+- **Right volume, right release.** The reboot phase re-reads the software
+  volumes and refuses to reboot unless the target volume holds a *completed*
+  install of `expected_version`. A staged volume from an earlier run is
+  found again automatically.
+- **HA interlock.** Before any reboot the play reads the device's failover
+  state. The **active** member of a device group is not rebooted unless the
+  operator asked for automatic failover or explicitly accepted the impact.
+  Standalone devices are exempt.
+- **Reboot proven, not assumed.** After `reboot volume`, the play waits for
+  the management port to go down. A rejected reboot command fails the run
+  immediately instead of after a long wait.
+- **One device at a time, stop on first failure.** `serial: 1` and
+  `any_errors_fatal: true`.
+- **Credentials never on a command line.** Provider facts are `no_log`; the
+  signature upload uses the `uri` module, not `curl`.
+- **Explicit rollback.** `--tags rollback -e rollback_volume=HD1.1` reboots
+  into a previous volume with the same interlock and verification.
+
+---
+
+## Repository layout
 
 ```
 bigip-upgrade/
+├── upgrade_bigip.yml                 # Playbook (serial: 1, any_errors_fatal)
 ├── ansible.cfg
-├── ansible-navigator.yml
-├── upgrade_bigip.yml                   # Main playbook
-├── vars/
-│   └── bigip_upgrade_vars.yml          # Operator-managed: ISO filename, sig file, target version
-├── inventory/
-│   └── hosts.ini                       # Canonical inventory (primary/secondary groups)
-├── group_vars/
-│   └── bigip/
-│       ├── vault.yml                   # Ansible Vault — credentials (gitignored)
-│       └── vault.yml.example           # Template — tracked in git
-└── roles/
-    └── bigip_upgrade/                  # Sealed — do not edit
-        ├── defaults/main.yml           # Tunable defaults (validate_certs, timeouts, etc.)
-        ├── vars/main.yml               # Role-internal constants only
-        ├── handlers/main.yml           # Placeholder
-        └── tasks/
-            ├── main.yml                # Orchestrator — imports phase files, defines tags
-            ├── preflight.yml           # ISO/sig validation, hostname gather
-            ├── backup.yml              # UCS backup — create on device, fetch locally
-            ├── version_check.yml       # Already-on-target check, volume selection
-            ├── upload.yml              # Upload ISO and sig file to device
-            ├── install.yml             # Install image to target volume (no reboot)
-            ├── reboot.yml              # Reboot into target volume
-            └── verify.yml             # Post-reboot wait and version assertion
+├── ansible-navigator.yml             # Execution-environment runner config
+├── requirements.yml                  # Collection dependency (f5networks.f5_modules)
+├── inventory/hosts.ini               # bigip_primary / bigip_secondary groups
+├── vars/bigip_upgrade_vars.yml       # OPERATOR: ISO, signature, expected version
+├── group_vars/bigip/vault.yml.example# Credentials template (encrypt the copy)
+├── roles/bigip_upgrade/
+│   ├── defaults/main.yml             # Tunables (timeouts, HA behaviour, backup)
+│   └── tasks/
+│       ├── main.yml                  # Orchestrator: phases and tags
+│       ├── preflight.yml             # Input/file validation, device identity
+│       ├── version_check.yml         # Already-on-target check, volume selection
+│       ├── backup.yml                # save sys config, UCS create/fetch/verify
+│       ├── upload.yml                # Signature, ISO, verified-image check
+│       ├── install.yml               # Install to target volume, confirm version
+│       ├── reboot.yml                # Staged-volume check, HA interlock, reboot
+│       ├── ha_interlock.yml          # Shared: failover state check / auto failover
+│       ├── reboot_into_volume.yml    # Shared: reboot + prove it started
+│       ├── verify.yml                # Wait, assert active version, summary
+│       └── rollback.yml              # Explicit rollback (tag: rollback)
+├── tests/logic_test.yml              # Device-free tests of the selection logic
+├── ee/                               # ansible-builder execution-environment template
+└── docs/                             # OPERATIONS.md, ENGINEERING.md
 ```
 
 ---
 
 ## Requirements
 
-- Ansible 2.16+
-- F5 collection: `ansible-galaxy collection install f5networks.f5_modules`
-- BIG-IP ISO and `.384.sig` file on the Ansible control node (filenames set in `vars/bigip_upgrade_vars.yml`)
+**Control node**
+
+- Ansible core 2.16 or later (required by the collection).
+- Python packages used by the collection: see `ee/requirements.txt`.
+- Collection: `ansible-galaxy collection install -r requirements.yml`
+  (floor 1.19.0; pin an exact version for production).
+- The BIG-IP ISO **and** its `.384.sig` file, downloaded from
+  [my.f5.com](https://my.f5.com/), reachable from the playbook directory.
+- HTTPS access to each device's management address and port
+  (default 443).
+
+**BIG-IP**
+
+- Software version 12 or later (collection requirement).
+- A user with the Administrator role for iControl REST.
+- Free space in `/shared/images` for the ISO and an inactive boot volume
+  (or room to create one; see `bigip_fallback_volume`).
 
 ---
 
 ## Quick start
 
-### 1. Set your target version, ISO, and sig file
+### 1. Install the collection
+
+```bash
+ansible-galaxy collection install -r requirements.yml
+```
+
+### 2. Describe the release
 
 Edit `vars/bigip_upgrade_vars.yml`:
 
 ```yaml
-iso_image_name: "BIGIP-21.1.0-0.0.38.iso"
-iso_sig_name: "BIGIP-21.1.0-0.0.38.iso.384.sig"
-expected_version: "21.1.0"
+iso_image_name: "BIGIP-17.1.1-0.0.2.iso"
+iso_sig_name: "BIGIP-17.1.1-0.0.2.iso.384.sig"
+expected_version: "17.1.1"      # version only, no build
+# expected_build: "0.0.2"       # optional exact build
 ```
 
-Both files must be present on the control node in the playbook directory:
+Place both files in the playbook directory (or use absolute paths).
+The signature must be named `<ISO filename>.384.sig` exactly.
 
-```bash
-scp BIGIP-21.1.0-0.0.38.iso BIGIP-21.1.0-0.0.38.iso.384.sig \
-    jmack@vegas:~/Downloads/f5/bigip-upgrade/
-```
+### 3. Inventory
 
-### 2. Set your inventory
-
-Edit `inventory/hosts.ini`. Primary devices are upgraded before secondary:
+Edit `inventory/hosts.ini`. Hosts are processed in order, all of
+`bigip_primary` before `bigip_secondary`. For an HA pair, put the
+**standby** member first:
 
 ```ini
 [bigip_primary]
-172.16.1.245
+bigip-a.example.com ansible_host=192.0.2.10
 
 [bigip_secondary]
-# 10.1.1.5
-
-[bigip:children]
-bigip_primary
-bigip_secondary
+bigip-b.example.com ansible_host=192.0.2.11
 ```
 
-### 3. Store credentials in Ansible Vault
-
-Copy the example file and populate with real credentials:
+### 4. Credentials
 
 ```bash
 cp group_vars/bigip/vault.yml.example group_vars/bigip/vault.yml
-```
-
-Edit `group_vars/bigip/vault.yml` and set your credentials:
-
-```yaml
-vault_bigip_username: "admin"
-vault_bigip_password: "your-password-here"
-```
-
-Then encrypt it:
-
-```bash
+$EDITOR group_vars/bigip/vault.yml          # set vault_bigip_username/password
 ansible-vault encrypt group_vars/bigip/vault.yml
 ```
 
-> **Important:** `vault.yml` is in `.gitignore` and will never be committed. Only `vault.yml.example` (with placeholder values) is tracked in git.
+`vault.yml` is git-ignored; only the `.example` file is tracked.
 
-### 4. Run
+### 5. Run
 
 ```bash
+# Everything, one device at a time
 ansible-playbook upgrade_bigip.yml --ask-vault-pass
-ansible-playbook upgrade_bigip.yml --vault-password-file ~/.vault_pass
+
+# Recommended: stage first, reboot in the maintenance window
+ansible-playbook upgrade_bigip.yml --tags preflight,backup,upload,install --ask-vault-pass
+ansible-playbook upgrade_bigip.yml --tags preflight,reboot,verify --ask-vault-pass
 ```
+
+See [docs/OPERATIONS.md](docs/OPERATIONS.md) for the full standalone and
+HA procedures.
 
 ---
 
-## Tag-based workflows
+## Phases and tags
 
-Each phase of the upgrade has a tag. Use tags to run only the phases you need.
-
-| Tag | Phase | Description |
+| Tag | What it does | Changes the device? |
 |---|---|---|
-| `preflight` | Pre-flight | ISO/sig file checks, hostname gather, version check, volume selection |
-| `backup` | Backup | Create UCS on device and fetch to control node |
-| `upload` | Upload | Upload ISO and sig file to BIG-IP `/shared/images/` |
-| `install` | Install | Install image to target volume — **no reboot** |
-| `reboot` | Reboot | Reboot BIG-IP into target volume |
-| `verify` | Verify | Wait for device to be ready, assert expected version is active |
+| `preflight` | Validates variables and the ISO/signature files, gathers hostname and HA state, ends the host if already on `expected_version`, selects the target volume | No |
+| `backup` | `save sys config`, creates a UCS on the device, fetches it to `ucs_backup_dest/<hostname>/`, verifies it is non-empty | Writes a UCS |
+| `upload` | Uploads the signature, then the ISO; requires the device to report the image as verified | Adds files to `/shared/images` |
+| `install` | Installs the image to the target volume (no reboot); confirms the volume now holds `expected_version` | Yes |
+| `reboot` | Confirms the target volume is staged, runs the HA interlock, reboots into the volume, waits for the port to go down | Reboot |
+| `verify` | Waits for the device, asserts `expected_version` is active, prints a summary | No |
+| `rollback` | Only with `--tags rollback`: reboots into `rollback_volume` and verifies | Reboot |
 
-> **Note:** The provider task is tagged `always` and runs regardless of which tags are specified.
-
----
-
-## Common use cases
-
-### Full upgrade in one shot
-
-```bash
-ansible-playbook upgrade_bigip.yml
-```
-
-### Upload and install during business hours, reboot in maintenance window
-
-This is the most common real-world pattern. The image is staged to the device in advance so the maintenance window only requires a reboot.
-
-**Step 1 — During business hours:**
-```bash
-ansible-playbook upgrade_bigip.yml --tags preflight,backup,upload,install
-```
-
-**Step 2 — During maintenance window:**
-```bash
-ansible-playbook upgrade_bigip.yml --tags preflight,reboot,verify
-```
-
-### Backup only
-
-```bash
-ansible-playbook upgrade_bigip.yml --tags preflight,backup
-```
-
-UCS files are saved to `./ucs_backups/<hostname>/` on the control node.
-
-### Pre-flight checks only
-
-```bash
-ansible-playbook upgrade_bigip.yml --tags preflight
-```
-
-### Upload only
-
-```bash
-ansible-playbook upgrade_bigip.yml --tags preflight,upload
-```
-
-### Skip backup during testing
-
-```bash
-ansible-playbook upgrade_bigip.yml --skip-tags backup
-```
-
-### Verbose debug output
-
-```bash
-ansible-playbook upgrade_bigip.yml -e debug_mode=true
-```
+The provider task is tagged `always`. `preflight` is required in any run
+that includes `install` or `reboot` (it selects the target volume).
 
 ---
 
-## Upgrade workflow detail
+## Variables
 
-For each host (one at a time due to `serial: 1`):
+**Operator variables** (`vars/bigip_upgrade_vars.yml`)
 
-1. **Preflight** — verifies ISO and sig file exist on control node, gathers BIG-IP hostname via `bigip_device_info`
-2. **Backup** — creates timestamped UCS on device via `bigip_ucs_fetch`, fetches to `./ucs_backups/<hostname>/`
-3. **Version check** — skips host with `meta: end_host` if already running `expected_version`
-4. **Volume selection** — selects first inactive volume; falls back to `bigip_fallback_volume`
-5. **Upload** — uploads ISO via `bigip_software_image`; uploads `.384.sig` via iControl REST file transfer endpoint
-6. **Install** — installs image to target volume via `bigip_software_install` with `state: installed` (no reboot)
-7. **Reboot** — issues `reboot volume <target>` via `bigip_command`
-8. **Verify** — waits for device to be ready via `bigip_wait`, then asserts expected version is active via `bigip_device_info`
+| Variable | Description |
+|---|---|
+| `iso_image_name` | ISO path on the control node (relative to the playbook dir or absolute) |
+| `iso_sig_name` | Signature path; basename must be `<ISO basename>.384.sig` |
+| `expected_version` | Version that must be active after the reboot, e.g. `17.1.1` |
+| `expected_build` | Optional exact build, e.g. `0.0.2` (default: any build) |
 
----
-
-## HA pairs
-
-The playbook uses `serial: 1` and `max_fail_percentage: 0`:
-
-- Devices upgrade one at a time
-- Any failure stops the run before touching remaining devices
-- For HA active/standby — upgrade standby first, verify, then failover and upgrade the other
-
-Structure your inventory to control upgrade order:
-
-```ini
-[bigip_primary]   # upgraded first
-172.16.1.245
-
-[bigip_secondary] # upgraded only after primary succeeds
-# 10.1.1.5
-```
-
----
-
-## Defaults you can override
-
-Defined in `roles/bigip_upgrade/defaults/main.yml`. Override via `group_vars`, `host_vars`, or `--extra-vars`:
+**Tunables** (`roles/bigip_upgrade/defaults/main.yml`; override in
+`group_vars`, `host_vars` or `-e`)
 
 | Variable | Default | Description |
 |---|---|---|
-| `bigip_validate_certs` | `false` | Set to `true` in production with valid certs |
-| `debug_mode` | `false` | Set to `true` for verbose volume/version output |
-| `bigip_fallback_volume` | `HD1.2` | Used when no inactive volume is detected |
-| `bigip_reboot_delay` | `120` | Seconds before `bigip_wait` starts polling after reboot |
-| `bigip_reboot_timeout` | `2400` | Max seconds to wait for device to return after reboot |
-| `ucs_backup_dest` | `./ucs_backups` | Local directory for UCS backups |
-| `ucs_async_timeout` | `600` | Seconds to wait for async UCS create on device (150-1800) |
+| `bigip_validate_certs` | `false` | Validate the management TLS certificate. Set `true` in production |
+| `bigip_server_port` | `443` | iControl REST port |
+| `bigip_api_timeout` | `120` | Per-request timeout for the F5 modules (seconds) |
+| `bigip_upload_wait_timeout` | `300` | Wait for the device to be ready before upload |
+| `bigip_sig_upload_path` | `/mgmt/cm/autodeploy/software-image-uploads` | REST path the `.384.sig` is uploaded to (stores in `/shared/images`) |
+| `bigip_require_verified_image` | `true` | Fail unless the device reports the image as verified |
+| `bigip_fallback_volume` | `HD1.2` | Volume to create when the device has no inactive volume |
+| `bigip_auto_failover` | `false` | Run `sys failover standby` on an active HA member before rebooting it |
+| `bigip_allow_active_reboot` | `false` | Bypass the HA interlock (traffic impact) |
+| `bigip_failover_wait_retries` / `_delay` | `12` / `5` | How long to wait for the unit to leave `active` after auto failover |
+| `bigip_reboot_detect_timeout` | `300` | Seconds to wait for the management port to go down after the reboot; `0` disables |
+| `bigip_reboot_delay` | `120` | Seconds before polling for the device after the reboot |
+| `bigip_reboot_timeout` | `2400` | Maximum seconds to wait for the device to return |
+| `ucs_backup_dest` | `./ucs_backups` | Local backup directory |
+| `ucs_async_timeout` | `600` | Wait for the async UCS create (150 to 1800) |
+| `ucs_save_config_first` | `true` | Run `save sys config` before creating the UCS |
+| `ucs_encryption_password` | `""` | Encrypt the UCS with this passphrase (keep in the vault) |
+| `ucs_remove_from_device` | `false` | Delete the UCS from the device after it is fetched |
+| `debug_mode` | `false` | Print gathered volume/device data |
 
 ---
 
-## Troubleshooting
+## HA pairs in one paragraph
 
-**ISO or sig file not found**
-```
-fatal: ISO not found at 'BIGIP-21.1.0-0.0.38.iso'
-```
-Copy both files to the control node. Filenames must match `vars/bigip_upgrade_vars.yml` exactly.
-
-**Version already active — host skipped**
-```
-TASK [Skip upgrade — target version already active]
-```
-Expected behavior on re-runs. Device is already running `expected_version`. No action taken.
-
-**Post-upgrade assertion fails**
-```
-fatal: Upgrade verification FAILED ... Expected active version 21.1.0 not found.
-```
-Check `tmsh show sys software volume`. Do not proceed to remaining devices until resolved manually.
-
-**Vault decryption error**
-```bash
-ansible-vault view group_vars/bigip/vault.yml
-```
-
-**Check device software volumes manually**
-```bash
-tmsh show sys software volume
-curl -sk -u admin:<password> https://<host>/mgmt/tm/sys/software/volume | python3 -m json.tool
-```
+Upgrade the standby member first, verify, fail over so the upgraded unit
+carries traffic, then upgrade the other member. The play enforces the
+"never reboot the active member" part; the failover between the two units
+is a deliberate operator step (or `bigip_auto_failover: true`). Do not
+config-sync between members running different versions; sync once both are
+upgraded. Full procedure: [docs/OPERATIONS.md](docs/OPERATIONS.md#3-ha-pair-procedure).
 
 ---
 
-## Execution environment (ansible-navigator)
-
-`ansible-navigator.yml` references a placeholder registry image. Replace it with your own internally-built EE before using navigator in production or air-gapped environments.
-
-```yaml
-# execution-environment.yml
-version: 1
-dependencies:
-  galaxy: requirements.yml      # includes f5networks.f5_modules
-  python: requirements.txt
-  system: bindep.txt
-```
+## Development
 
 ```bash
-pip install ansible-builder
-ansible-builder build -t your-registry.example.com/f5-ee:1.0.0 --container-runtime docker
-docker push your-registry.example.com/f5-ee:1.0.0
+pip install "ansible-core>=2.16" ansible-lint yamllint
+ansible-galaxy collection install -r requirements.yml
+yamllint --strict .
+ansible-lint                       # production profile
+ansible-playbook upgrade_bigip.yml --syntax-check -e bigip_username=x -e bigip_password=x
+ansible-playbook tests/logic_test.yml
 ```
+
+The same checks run in GitHub Actions on every push and pull request
+(`.github/workflows/lint.yml`).
 
 ---
 
-## Useful references
+## References
 
-- [F5 Ansible collection docs](https://clouddocs.f5.com/products/orchestration/ansible/devel/)
+- [F5 Ansible collection documentation](https://clouddocs.f5.com/products/orchestration/ansible/devel/)
 - [f5networks.f5_modules module index](https://docs.ansible.com/projects/ansible/latest/collections/f5networks/f5_modules/index.html)
-- [BIG-IP software image verification (K24341140)](https://my.f5.com/manage/s/article/K24341140)
-- [BIG-IP upgrade guide (K84554955)](https://support.f5.com/csp/article/K84554955)
-- [Ansible Vault docs](https://docs.ansible.com/ansible/latest/vault_guide/index.html)
-- [ansible-builder docs](https://ansible-builder.readthedocs.io/)
+- [K24341140: verifying BIG-IP software images with .sig files](https://my.f5.com/manage/s/article/K24341140)
+- [K84554955: BIG-IP upgrade guide](https://my.f5.com/manage/s/article/K84554955)
+- [K13132: backing up and restoring BIG-IP configuration files with a UCS archive](https://my.f5.com/manage/s/article/K13132)
+- [K7727: license activation may be required before a software upgrade](https://my.f5.com/manage/s/article/K7727)
+- [Ansible Vault](https://docs.ansible.com/ansible/latest/vault_guide/index.html)
+- [ansible-builder](https://ansible-builder.readthedocs.io/)

@@ -1,13 +1,19 @@
 # Never commit unencrypted vault files
 group_vars/bigip/vault.yml
 
+# Never commit software images or signatures
+*.iso
+*.sig
+
 # Ansible artifacts
 *.retry
 .ansible/
+logs/
 
 # UCS backups
 ucs_backups/
 
 # Editor
 .vscode/
+.idea/
 *.swp

@@ -1,0 +1,37 @@
+---
+# roles/bigip_upgrade/tasks/reboot_into_volume.yml
+# Shared by reboot.yml and rollback.yml. Reboots into bigip_boot_volume and
+# confirms the management port actually went down.
+
+- name: Reboot into the requested volume
+  f5networks.f5_modules.bigip_command:
+    provider: "{{ provider }}"
+    commands:
+      - "reboot volume {{ bigip_boot_volume }}"
+    warn: false
+  delegate_to: localhost
+  register: reboot_result
+  # The reboot drops the management session, so the module often reports a
+  # connection error on success. The task below proves the reboot started;
+  # verify.yml / rollback.yml prove the device came back on the right volume.
+  changed_when: true
+  failed_when: false
+
+- name: Debug — reboot command result
+  ansible.builtin.debug:
+    var: reboot_result
+  when: debug_mode | bool
+
+- name: Confirm the management port stopped answering (reboot started)
+  ansible.builtin.wait_for:
+    host: "{{ bigip_mgmt_host }}"
+    port: "{{ bigip_server_port }}"
+    state: stopped
+    timeout: "{{ bigip_reboot_detect_timeout }}"
+    msg: >-
+      {{ inventory_hostname }} kept answering on port {{ bigip_server_port }}
+      for {{ bigip_reboot_detect_timeout }}s after 'reboot volume
+      {{ bigip_boot_volume }}'. The reboot command probably did not execute.
+      Module result: {{ reboot_result.msg | default(reboot_result.stdout | default('')) }}
+  delegate_to: localhost
+  when: bigip_reboot_detect_timeout | int > 0

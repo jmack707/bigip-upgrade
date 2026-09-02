@@ -1,37 +1,83 @@
 ---
 # roles/bigip_upgrade/tasks/upload.yml
-# Uploads the ISO and signature file to the BIG-IP.
-# bigip_software_image handles the ISO via iControl REST.
-# The .384.sig file is uploaded via curl due to extension restrictions in the module.
+# Uploads the signature, then the ISO, then requires the device to report the
+# image as verified.
+#
+# The signature is uploaded first so it is already in /shared/images when
+# the BIG-IP imports the ISO. bigip_software_image only accepts ISOs, so the
+# .384.sig goes through the same iControl REST upload endpoint directly via
+# the uri module (credentials as module parameters, never on a command line;
+# TLS verification honours bigip_validate_certs).
 
 - name: Ensure BIG-IP is ready before upload
-  bigip_wait:
+  f5networks.f5_modules.bigip_wait:
     provider: "{{ provider }}"
-    timeout: 300
+    timeout: "{{ bigip_upload_wait_timeout }}"
   delegate_to: localhost
 
-- name: Upload BIG-IP ISO image
-  bigip_software_image:
+# Single-chunk upload; preflight asserts the .sig is under the 1 MiB chunk
+# limit of the iControl REST file-transfer protocol.
+- name: Upload ISO signature file to the device
+  ansible.builtin.uri:
+    url: "https://{{ bigip_mgmt_host }}:{{ bigip_server_port }}{{ bigip_sig_upload_path }}/{{ iso_sig_name | basename }}"
+    method: POST
+    url_username: "{{ bigip_username }}"
+    url_password: "{{ bigip_password }}"   # marked no_log inside the uri module
+    force_basic_auth: true
+    validate_certs: "{{ bigip_validate_certs }}"
+    headers:
+      Content-Type: application/octet-stream
+      Content-Range: "0-{{ iso_sig_stat.stat.size - 1 }}/{{ iso_sig_stat.stat.size }}"
+    src: "{{ iso_sig_name }}"
+    status_code: 200
+    timeout: "{{ bigip_api_timeout }}"
+  delegate_to: localhost
+  register: sig_upload
+  changed_when: true
+
+- name: Upload BIG-IP ISO image (skipped by the module if already present)
+  f5networks.f5_modules.bigip_software_image:
     provider: "{{ provider }}"
     image: "{{ iso_image_name }}"
     state: present
   delegate_to: localhost
 
-- name: Upload ISO signature file via iControl REST
-  shell: >
-    curl -sk -u {{ bigip_username }}:{{ bigip_password }}
-    -X POST
-    https://{{ inventory_hostname }}/mgmt/shared/file-transfer/uploads/{{ iso_sig_name | basename }}
-    -H "Content-Type: application/octet-stream"
-    -H "Content-Range: 0-{{ iso_sig_stat.stat.size - 1 }}/{{ iso_sig_stat.stat.size }}"
-    --data-binary @{{ iso_sig_name }}
+- name: Gather software images on the device
+  f5networks.f5_modules.bigip_device_info:
+    gather_subset:
+      - software-images
+    provider: "{{ provider }}"
   delegate_to: localhost
-  register: sig_upload
-  no_log: true
+  register: image_info
 
-- name: Verify signature file upload succeeded
-  assert:
+- name: Debug — software images on device
+  ansible.builtin.debug:
+    var: image_info.software_images
+  when: debug_mode | bool
+
+# 'verified' is the device's own signature check result for the image
+# (tmsh show sys software image). Fail closed unless the operator has
+# explicitly turned the requirement off.
+- name: Assert the uploaded image is present and verified by the device
+  ansible.builtin.assert:
     that:
-      - sig_upload.rc == 0
-    fail_msg: "Signature file upload failed."
-    success_msg: "Signature file uploaded successfully."
+      - uploaded | length == 1
+      - (not bigip_require_verified_image | bool) or (uploaded[0].verified | default('no') | string | lower in ['yes', 'true'])
+    fail_msg: >-
+      Image check FAILED on {{ inventory_hostname }}:
+      {{ iso_image_name | basename }} present: {{ uploaded | length == 1 }},
+      verified: {{ (uploaded | map(attribute='verified') | list) if uploaded | length > 0 else 'n/a' }}.
+      The device did not report the image as signature-verified. Check with
+      'tmsh show sys software image' that the ISO and its .384.sig are both in
+      /shared/images and that the .sig matches this ISO. Only after verifying
+      the image by other means, re-run with -e bigip_require_verified_image=false.
+    success_msg: >-
+      {{ iso_image_name | basename }} is on {{ inventory_hostname }}
+      (verified: {{ uploaded[0].verified | default('n/a') }}).
+  vars:
+    uploaded: >-
+      {{
+        image_info.software_images
+        | selectattr('name', 'equalto', iso_image_name | basename)
+        | list
+      }}
