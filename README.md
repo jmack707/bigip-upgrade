@@ -151,6 +151,19 @@ ansible-vault encrypt group_vars/bigip/vault.yml
 
 `vault.yml` is git-ignored; only the `.example` file is tracked.
 
+For production devices, also apply the hardened settings — turn on TLS
+certificate validation and encrypt the UCS backups:
+
+```bash
+cp group_vars/bigip/production.yml.example group_vars/bigip/production.yml
+# then set vault_ucs_encryption_password in vault.yml (see step 4)
+```
+
+`production.yml.example` documents each production override (`.example` files
+are not auto-loaded; copying to `production.yml` activates them). The F5
+collection is pinned to an exact version in `requirements.yml` for
+reproducible runs.
+
 ### 5. Run
 
 ```bash
