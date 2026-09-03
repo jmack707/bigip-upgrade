@@ -83,6 +83,13 @@ ucs_backup_dest: "./ucs_backups"
 # Valid range 150-1800 (F5 collection). Increase for large configurations.
 ucs_async_timeout: 600
 
+# The UCS is downloaded by roles/bigip_upgrade/files/bigip_download_ucs.py, not
+# by bigip_ucs_fetch (whose downloader writes a 0-byte file for large archives).
+# REST download path and chunk size in bytes (10 MiB); lower the chunk only if a
+# device rejects it.
+bigip_ucs_download_path: "/mgmt/shared/file-transfer/ucs-downloads"
+bigip_ucs_download_chunk_size: 10485760
+
 # Run 'tmsh save sys config' before creating the UCS so unsaved running
 # configuration is captured in the archive.
 ucs_save_config_first: true

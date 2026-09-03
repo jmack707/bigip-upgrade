@@ -1,8 +1,15 @@
 ---
 # roles/bigip_upgrade/tasks/backup.yml
 # Saves the running configuration, creates a UCS archive on the device,
-# fetches it to the control node and verifies the local copy before any
+# downloads it to the control node and verifies the local copy before any
 # change is made to the device.
+#
+# The UCS is created on the device and downloaded in two steps rather than with
+# bigip_ucs_fetch's combined create-and-fetch. That module creates the archive
+# correctly but its downloader writes a 0-byte file for a large UCS while still
+# reporting success (reproduced on 21.1.0.2 with a ~569 MB UCS). The create step
+# below still uses the module (only_create_file), and files/bigip_download_ucs.py
+# does the download over the same REST endpoint, chunked and verified.
 
 - name: Save running configuration to disk before creating the UCS
   f5networks.f5_modules.bigip_command:
@@ -15,8 +22,7 @@
   when: ucs_save_config_first | bool
 
 # Timestamp to the second so a re-run the same day creates a fresh archive
-# instead of fetching an earlier one (bigip_ucs_fetch reuses an existing
-# file of the same name on the device).
+# rather than reusing an earlier one of the same name.
 - name: Set UCS filename fact
   ansible.builtin.set_fact:
     ucs_filename: "pre-upgrade-{{ bigip_device_hostname }}-{{ now(utc=true, fmt='%Y%m%d-%H%M%S') }}.ucs"
@@ -29,19 +35,53 @@
     mode: "0750"
   delegate_to: localhost
 
-- name: Create UCS on device and fetch it to the control node
+# only_create_file: create the UCS on the device (in /var/local/ucs) and wait
+# for it, without the module's broken download. async_timeout bounds the wait
+# (150-1800s); raise ucs_async_timeout for a large configuration.
+- name: Create the UCS on the device
   f5networks.f5_modules.bigip_ucs_fetch:
     provider: "{{ provider }}"
     src: "{{ ucs_filename }}"
-    dest: "{{ ucs_local_dir }}/{{ ucs_filename }}"
-    create_on_missing: true
-    fail_on_missing: false
+    only_create_file: true
     async_timeout: "{{ ucs_async_timeout }}"
     encryption_password: "{{ ucs_encryption_password | default(omit, true) }}"
   delegate_to: localhost
-  register: ucs_backup
+  register: ucs_create
 
-- name: Stat the fetched UCS on the control node
+- name: Download the UCS to the control node in chunks
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - "{{ role_path }}/files/bigip_download_ucs.py"
+      - "--host={{ bigip_mgmt_host }}"
+      - "--port={{ bigip_server_port }}"
+      - "--user={{ bigip_username }}"
+      - "--path={{ bigip_ucs_download_path }}"
+      - "--name={{ ucs_filename }}"
+      - "--dest={{ ucs_local_dir }}/{{ ucs_filename }}"
+      - "--chunk={{ bigip_ucs_download_chunk_size }}"
+      - "--retries={{ bigip_upload_retries }}"
+      - "--timeout={{ bigip_api_timeout }}"
+      - "--validate-certs={{ bigip_validate_certs | string }}"
+    stdin: "{{ bigip_password }}"
+  delegate_to: localhost
+  no_log: true                 # password is on stdin — hide the task's args
+  register: ucs_download
+  changed_when: ucs_download.rc == 0
+  failed_when: false           # handled below so the JSON message can be shown
+
+- name: Report the UCS download result
+  ansible.builtin.assert:
+    that:
+      - ucs_download.rc == 0
+    fail_msg: >-
+      UCS download from {{ inventory_hostname }} failed
+      (rc={{ ucs_download.rc | default('n/a') }}):
+      {{ ucs_download.stdout | default('') }} {{ ucs_download.stderr | default('') }}
+    success_msg: >-
+      UCS downloaded from {{ inventory_hostname }}: {{ ucs_download.stdout | default('') }}
+
+- name: Stat the downloaded UCS on the control node
   ansible.builtin.stat:
     path: "{{ ucs_local_dir }}/{{ ucs_filename }}"
     get_checksum: false
