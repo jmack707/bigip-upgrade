@@ -220,19 +220,20 @@ Ansible-side facts verified with `ansible-doc`:
 These could not be verified against product documentation from the
 development environment (F5 documentation hosts were not reachable). Each is
 isolated behind a variable or an assertion so a wrong assumption fails the
-run visibly rather than silently. A1, A2 and the upload path have been
-validated on a lab **BIG-IP 21.1.0.2** device (control node Rocky Linux,
-ansible-core 2.16, f5_modules 1.43); A3-A6 remain to be exercised in a full
-staged upgrade and rollback.
+run visibly rather than silently. A full standalone upgrade (upload →
+install → reboot → verify) was validated end to end on a lab **BIG-IP
+21.1.0.2** device (control node Rocky Linux, ansible-core 2.16, f5_modules
+1.43): A1-A5 confirmed. A6 (multi-traffic-group HA failover) and rollback on
+an HA pair still need a two-node lab.
 
 | # | Assumption | Status | If wrong you will see | Mitigation / variable |
 |---|---|---|---|---|
 | A1 | `software-image-uploads` accepts a `.384.sig` filename and stores it in `/shared/images` | **Confirmed (21.1.0.2)** | `Upload ISO signature file` fails with an HTTP error | `bigip_sig_upload_path` |
 | A2 | BIG-IP reports `verified: yes` for an ISO whose `.384.sig` is present, with no ownership step | **Confirmed (21.1.0.2)** | `Assert the uploaded image is present and verified` fails | `bigip_require_verified_image: false` after manual check; `tmsh show sys software image` |
-| A3 | `tmsh reboot volume <name>` via `bigip_command` reboots into that volume | To validate | `Confirm the management port stopped answering` fails with the module result | Alternative: `bigip_software_install` `state: activated` (module-native, waits without timeout) |
-| A4 | A standalone device reports sync-status `mode: standalone`, a member `high-availability` | Partly (lab unit is `Standalone`, reports `active`; interlock exempts it) | Interlock refuses a standalone device, or lets an active HA member through | `bigip_allow_active_reboot`; check `tmsh show cm sync-status` |
-| A5 | The management port closes within `bigip_reboot_detect_timeout` (300 s) on your platform | To validate | False failure at `Confirm the management port stopped answering` | Raise the timeout, or `0` to disable |
-| A6 | `run sys failover standby` without a traffic-group argument fails over all traffic groups | To validate | With several traffic groups some stay active and the wait times out | Fail over manually, or loop per traffic-group in `ha_interlock.yml` |
+| A3 | `tmsh reboot volume <name>` via `bigip_command` reboots into that volume | **Confirmed (21.1.0.2)** — stdout "The system will be rebooted momentarily", booted HD1.2 | `Confirm the management port stopped answering` fails with the module result | Alternative: `bigip_software_install` `state: activated` (module-native, waits without timeout) |
+| A4 | A standalone device reports sync-status `mode: standalone`, a member `high-availability` | **Confirmed for standalone** (lab unit is `standalone`, reports `active`; interlock exempts it). HA member side still to check | Interlock refuses a standalone device, or lets an active HA member through | `bigip_allow_active_reboot`; check `tmsh show cm sync-status` |
+| A5 | The management port closes within `bigip_reboot_detect_timeout` (300 s) on your platform | **Confirmed (21.1.0.2 VE)** | False failure at `Confirm the management port stopped answering` | Raise the timeout, or `0` to disable |
+| A6 | `run sys failover standby` without a traffic-group argument fails over all traffic groups | To validate (needs an HA pair) | With several traffic groups some stay active and the wait times out | Fail over manually, or loop per traffic-group in `ha_interlock.yml` |
 
 Validated upload behaviour on the lab device (record for the next platform):
 
