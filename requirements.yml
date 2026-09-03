@@ -2,10 +2,12 @@
 # Ansible collection dependencies.
 #   ansible-galaxy collection install -r requirements.yml
 #
-# Floor: 1.19.0 fixed bigip_software_install idempotency when a volume holds a
-# different version (collection CHANGELOG), which the re-run behaviour of this
-# role relies on. Pin an exact version for reproducible production runs and
-# execution-environment builds.
+# Pinned to an exact version for reproducible production runs and
+# execution-environment builds. 1.43.0 is the version validated against a
+# lab BIG-IP 21.1.0.2 (see docs/ENGINEERING.md). The known-good floor is
+# 1.19.0, which fixed bigip_software_install idempotency when a volume holds
+# a different version. Bump this pin deliberately after re-testing a newer
+# release.
 collections:
   - name: f5networks.f5_modules
-    version: ">=1.19.0"
+    version: "1.43.0"

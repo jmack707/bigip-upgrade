@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/), and this project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- Pinned `f5networks.f5_modules` to an exact version (1.43.0, the lab-validated
+  release) in `requirements.yml` for reproducible runs.
+
+### Added
+- `group_vars/bigip/production.yml.example` — hardened production overrides:
+  `bigip_validate_certs: true` (TLS certificate validation) and encrypted UCS
+  backups (`ucs_encryption_password` from the vault), with commented notes on
+  the other settings worth reviewing for production.
+- `vault_ucs_encryption_password` in the vault example, and a README step for
+  applying the production settings.
+
 ## [1.0.0] - 2026-09-03
 
 First stable release: HA-aware, fail-safe F5 BIG-IP software upgrades with

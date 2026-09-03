@@ -1,0 +1,48 @@
+# group_vars/bigip/production.yml.example
+# ─────────────────────────────────────────────────────────────────────────────
+# Hardened settings for PRODUCTION devices. The role's defaults
+# (roles/bigip_upgrade/defaults/main.yml) are tuned for a lab; these override
+# them for real devices.
+#
+# This file ends in ".example" so Ansible does NOT load it automatically.
+# To activate it, copy it to a file Ansible loads for the bigip group:
+#
+#   cp group_vars/bigip/production.yml.example group_vars/bigip/production.yml
+#
+# Any *.yml file in group_vars/bigip/ is applied to every host in the bigip
+# group. Review each setting before you do this.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Validate the BIG-IP management TLS certificate. This proves you are talking
+# to the real device and not an impostor before any credential is sent.
+# MUST be true in production. Requires the device to present a certificate your
+# control node trusts (a CA-signed cert, or the device cert added to the trust
+# store). Leave the role default (false) only for lab devices with self-signed
+# certificates.
+bigip_validate_certs: true
+
+# Encrypt the UCS configuration backup. A UCS contains the full device
+# configuration, including private keys, so an unencrypted archive exposes
+# secrets. The passphrase comes from the vault (vault.yml); keep a record of
+# it — a UCS cannot be restored without it.
+ucs_encryption_password: "{{ vault_ucs_encryption_password }}"
+
+# ── Other settings you may want to review for production ─────────────────────
+# Uncomment and adjust as needed; all are documented in
+# roles/bigip_upgrade/defaults/main.yml.
+#
+# Raise if the device is slow to answer 'save sys config' or UCS creation:
+#   bigip_api_timeout: 300
+#
+# Maximum seconds to wait for the device to return after a reboot. Increase for
+# slow hardware or a long first boot:
+#   bigip_reboot_timeout: 3600
+#
+# In an HA pair, set true to have the play fail an active unit over to standby
+# before rebooting it. Leave false to require a manual, deliberate failover
+# (recommended until you have validated failover on your pair):
+#   bigip_auto_failover: false
+#
+# Delete each UCS from the device after it is fetched to the control node, to
+# avoid filling the device disk over many upgrades:
+#   ucs_remove_from_device: true
