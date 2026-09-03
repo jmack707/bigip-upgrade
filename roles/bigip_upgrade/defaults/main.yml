@@ -23,10 +23,17 @@ bigip_api_timeout: 120
 # Seconds to wait for the device to be ready before uploading the image.
 bigip_upload_wait_timeout: 300
 
-# iControl REST path the ISO signature (.384.sig) is uploaded to. The default
-# is the same endpoint the F5 collection uses for ISO uploads, which stores
-# files in /shared/images next to the ISO (where BIG-IP looks for the .sig).
+# iControl REST path the ISO and signature (.384.sig) are uploaded to. Files
+# land in /shared/images, next to each other, where BIG-IP looks for the .sig.
 bigip_sig_upload_path: "/mgmt/cm/autodeploy/software-image-uploads"
+
+# ISO upload chunk size in bytes (default 10 MiB). The role uploads the ISO
+# with its own chunked uploader, not the F5 module (see docs/ENGINEERING.md).
+# Lower this only if a device rejects a chunk; 10 MiB is validated on 17.x/21.x.
+bigip_upload_chunk_size: 10485760
+
+# Retries per chunk on a transient (connection/5xx) error before failing.
+bigip_upload_retries: 3
 
 # After upload, require the BIG-IP to report the image as 'verified' (its own
 # signature check) before installing. Set to false only after confirming the

@@ -80,7 +80,14 @@ bigip-upgrade/
 
 **Control node**
 
-- Ansible core 2.16 or later (required by the collection).
+- Ansible core 2.16 or later (required by the collection), which needs
+  **Python 3.10 or later**. On RHEL/Rocky 8/9 the system Python is 3.9 and
+  cannot install ansible-core 2.16 — use a newer Python in a venv:
+  ```bash
+  sudo dnf install -y python3.11
+  python3.11 -m venv ~/f5-venv && source ~/f5-venv/bin/activate
+  pip install "ansible-core>=2.16,<2.18"
+  ```
 - Python packages used by the collection: see `ee/requirements.txt`.
 - Collection: `ansible-galaxy collection install -r requirements.yml`
   (floor 1.19.0; pin an exact version for production).
@@ -197,7 +204,9 @@ that includes `install` or `reboot` (it selects the target volume).
 | `bigip_server_port` | `443` | iControl REST port |
 | `bigip_api_timeout` | `120` | Per-request timeout for the F5 modules (seconds) |
 | `bigip_upload_wait_timeout` | `300` | Wait for the device to be ready before upload |
-| `bigip_sig_upload_path` | `/mgmt/cm/autodeploy/software-image-uploads` | REST path the `.384.sig` is uploaded to (stores in `/shared/images`) |
+| `bigip_sig_upload_path` | `/mgmt/cm/autodeploy/software-image-uploads` | REST path the ISO and `.384.sig` are uploaded to (stores in `/shared/images`) |
+| `bigip_upload_chunk_size` | `10485760` | ISO upload chunk size in bytes (10 MiB); lower only if a device rejects a chunk |
+| `bigip_upload_retries` | `3` | Retries per chunk on a transient error |
 | `bigip_require_verified_image` | `true` | Fail unless the device reports the image as verified |
 | `bigip_fallback_volume` | `HD1.2` | Volume to create when the device has no inactive volume |
 | `bigip_auto_failover` | `false` | Run `sys failover standby` on an active HA member before rebooting it |

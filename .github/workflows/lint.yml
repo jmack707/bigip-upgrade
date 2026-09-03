@@ -20,10 +20,15 @@ jobs:
           python-version: "3.12"
 
       - name: Install Ansible and linters
-        run: pip install "ansible-core>=2.16" ansible-lint yamllint
+        # Pin to the supported ansible-core range (matches the README). An
+        # unbounded install pulls bleeding-edge releases; 2.21.x carries an
+        # ansible-galaxy response-cache regression that breaks the install below.
+        run: pip install "ansible-core>=2.16,<2.18" ansible-lint yamllint
 
       - name: Install collection dependencies
-        run: ansible-galaxy collection install -r requirements.yml
+        # --no-cache avoids the ansible-galaxy response-cache corruption seen on
+        # the hosted runners; the cache gives nothing on a fresh runner anyway.
+        run: ansible-galaxy collection install -r requirements.yml --no-cache
 
       - name: Run yamllint
         run: yamllint --strict .

@@ -108,13 +108,28 @@ named explicitly.
 
 ### upload
 
-- Signature first, then ISO, so the signature is already in
-  `/shared/images` when the BIG-IP imports the ISO.
-- Signature goes to `bigip_sig_upload_path` (default the same
-  `software-image-uploads` endpoint the collection uses for ISOs, which
-  stores into `/shared/images`).
-- Gathers `software-images` and asserts the ISO is present and
-  `verified` is yes/true, unless `bigip_require_verified_image` is false.
+- Signature first (via `uri`), then ISO, so the signature is already in
+  `/shared/images` when the BIG-IP parses the ISO. Both go to
+  `bigip_sig_upload_path` (`software-image-uploads`), which stores into
+  `/shared/images`.
+- The ISO is uploaded by `files/bigip_upload_image.py`, **not** by
+  `bigip_software_image`. The collection's uploader posts fixed 7 MiB
+  chunks and, on any mid-stream error, rewinds the file without resetting
+  its byte offset, corrupting the transfer; after three retries it fails
+  with "Failed to upload file too many times" and leaves stale chunk state
+  in restjavad that blocks every retry until the service is restarted.
+  This was reproduced on a lab 21.1.0.2 device under both ansible-core 2.14
+  and 2.16 (see the decision record). The script sends correctly-ranged
+  chunks (default 10 MiB, `bigip_upload_chunk_size`), retries each chunk in
+  place (`bigip_upload_retries`), reads the password from stdin, and honours
+  `bigip_validate_certs`. It exits with one JSON line the task parses.
+- The upload is skipped when the image is already present, so re-runs and
+  the staged-then-reboot workflow do not re-send several GB.
+- After upload the play polls `software-images` until the ISO registers,
+  then asserts it is present and `verified` is yes/true, unless
+  `bigip_require_verified_image` is false. A raw upload to
+  `software-image-uploads` registers and verifies exactly as the module's
+  did (confirmed in the lab: `verified: yes` with no ownership step).
 
 ### install
 
@@ -203,28 +218,50 @@ Ansible-side facts verified with `ansible-doc`:
 ## 5. Assumptions to validate in the lab
 
 These could not be verified against product documentation from the
-development environment (F5 documentation hosts were not reachable).
-Each is isolated behind a variable or an assertion so a wrong assumption
-fails the run visibly rather than silently. Validate them on a lab device
-before first production use and record the outcome here.
+development environment (F5 documentation hosts were not reachable). Each is
+isolated behind a variable or an assertion so a wrong assumption fails the
+run visibly rather than silently. A full standalone upgrade (upload →
+install → reboot → verify) was validated end to end on a lab **BIG-IP
+21.1.0.2** device (control node Rocky Linux, ansible-core 2.16, f5_modules
+1.43): A1-A5 confirmed. A6 (multi-traffic-group HA failover) and rollback on
+an HA pair still need a two-node lab.
 
-| # | Assumption | If wrong you will see | Mitigation / variable |
-|---|---|---|---|
-| A1 | The `software-image-uploads` endpoint accepts a `.384.sig` filename and stores it in `/shared/images` | `Upload ISO signature file` fails with an HTTP error, or the image is never reported verified | `bigip_sig_upload_path`. The alternative `/mgmt/shared/file-transfer/uploads` is known to accept any file but stores under `/var/config/rest/downloads/`, which is not where BIG-IP looks for signatures; it would then need a copy step (bash, not available in appliance mode) |
-| A2 | BIG-IP populates `verified: yes` for an ISO whose `.384.sig` is present when the image is imported (F5 K24341140 describes signature verification for 14.1.0 and later) | `Assert the uploaded image is present and verified` fails | `bigip_require_verified_image: false` after manual verification; check `tmsh show sys software image` |
-| A3 | `tmsh reboot volume <name>` is accepted through `bigip_command` and reboots into that volume | `Confirm the management port stopped answering` fails with the module result in the message | Alternative: `bigip_software_install` with `state: activated` (module-native, but waits without timeout) |
-| A4 | A standalone device reports sync-status `mode: standalone` and a device-group member `high-availability` | Interlock refuses a standalone device, or lets an active HA member through | `bigip_allow_active_reboot` for the first case; check `tmsh show cm sync-status` |
-| A5 | The management port closes within `bigip_reboot_detect_timeout` (300 s) after the reboot command on your platform | False failure at `Confirm the management port stopped answering` | Raise the timeout, or `0` to disable the check |
-| A6 | `run sys failover standby` without a traffic-group argument fails over all traffic groups on the unit | With several traffic groups some remain active and the wait times out | Fail over manually, or extend `ha_interlock.yml` with a per-traffic-group loop |
+| # | Assumption | Status | If wrong you will see | Mitigation / variable |
+|---|---|---|---|---|
+| A1 | `software-image-uploads` accepts a `.384.sig` filename and stores it in `/shared/images` | **Confirmed (21.1.0.2)** | `Upload ISO signature file` fails with an HTTP error | `bigip_sig_upload_path` |
+| A2 | BIG-IP reports `verified: yes` for an ISO whose `.384.sig` is present, with no ownership step | **Confirmed (21.1.0.2)** | `Assert the uploaded image is present and verified` fails | `bigip_require_verified_image: false` after manual check; `tmsh show sys software image` |
+| A3 | `tmsh reboot volume <name>` via `bigip_command` reboots into that volume | **Confirmed (21.1.0.2)** — stdout "The system will be rebooted momentarily", booted HD1.2 | `Confirm the management port stopped answering` fails with the module result | Alternative: `bigip_software_install` `state: activated` (module-native, waits without timeout) |
+| A4 | A standalone device reports sync-status `mode: standalone`, a member `high-availability` | **Confirmed for standalone** (lab unit is `standalone`, reports `active`; interlock exempts it). HA member side still to check | Interlock refuses a standalone device, or lets an active HA member through | `bigip_allow_active_reboot`; check `tmsh show cm sync-status` |
+| A5 | The management port closes within `bigip_reboot_detect_timeout` (300 s) on your platform | **Confirmed (21.1.0.2 VE)** | False failure at `Confirm the management port stopped answering` | Raise the timeout, or `0` to disable |
+| A6 | `run sys failover standby` without a traffic-group argument fails over all traffic groups | To validate (needs an HA pair) | With several traffic groups some stay active and the wait times out | Fail over manually, or loop per traffic-group in `ha_interlock.yml` |
 
-How to validate A1 and A2 in one go on a lab device:
+Validated upload behaviour on the lab device (record for the next platform):
+
+- A clean chunked upload of a 3.7 GB ISO at 10 MiB chunks completed in one
+  pass (355 chunks, ~210 s) and the device reported `verified: yes`.
+- The collection's `bigip_software_image` failed the same upload with
+  "Failed to upload file too many times" on both ansible-core 2.14 and 2.16,
+  which is why the role uses `files/bigip_upload_image.py` instead.
+- An interrupted upload leaves stale chunk state in restjavad
+  (`Received chunk for previously used offset ...`) that a `bigstart restart
+  restjavad` clears; deleting the tmp file alone does not.
 
 ```bash
+# revalidate on a new platform:
 ansible-playbook upgrade_bigip.yml --tags preflight,upload -e debug_mode=true --limit <lab-device>
 # then on the device:
 tmsh show sys software image      # 'verified yes' for the uploaded ISO
 ls -l /shared/images/             # ISO and .384.sig side by side
 ```
+
+### Control-node requirement (learned in the lab)
+
+The collection requires **ansible-core >= 2.16**, which needs **control-node
+Python >= 3.10**. On RHEL/Rocky 8/9 the system Python is 3.9 and its
+ansible-core tops out at 2.15, so a `python3.11 -m venv` (or newer) is
+required; running under the stock 2.14 produced the `ansible.netcommon does
+not support Ansible version 2.14.18` warning and unsupported behaviour. This
+is documented in the README requirements.
 
 ## 6. Security
 
@@ -255,7 +292,7 @@ ls -l /shared/images/             # ISO and .384.sig side by side
 | `device_info`, `bigip_self_device`, `bigip_ha_mode`, `bigip_device_hostname` | preflight | backup (folder/filename), output |
 | `software_volumes_info`, `active_volume`, `already_on_target`, `staged_volumes`, `available_volumes`, `target_volume` | version_check | install, reboot |
 | `ucs_filename`, `ucs_local_dir`, `ucs_backup`, `ucs_local` | backup | backup |
-| `sig_upload`, `image_info` | upload | upload |
+| `image_info_pre`, `iso_already_present`, `sig_upload`, `iso_upload`, `image_info` | upload | upload |
 | `post_install_info` | install | install |
 | `pre_reboot_info`, `bigip_boot_volume` | reboot | reboot_into_volume |
 | `ha_info`, `ha_info_post`, `bigip_failover_state` | ha_interlock | ha_interlock |
@@ -277,7 +314,13 @@ original role; ansible-lint's `var-naming[no-role-prefix]` is skipped in
   it rather than implementing chunking.
 - **Multiple traffic groups**: see A6.
 - **No license, disk-space or release-note checks**; see the operator
-  checklist in OPERATIONS.md.
+  checklist in OPERATIONS.md. A `/shared` disk-space check would need `df`
+  over the bash endpoint, which appliance mode disables, so it is left as a
+  documented manual step rather than an unreliable task.
+- **Interrupted ISO upload** leaves stale chunk state in restjavad; the
+  upload task's failure message says to clear it and `bigstart restart
+  restjavad`. The role cannot restart a device service itself (appliance
+  mode), so recovery is a one-line operator step.
 - **No config-sync** after both members are upgraded; deliberate.
 - **`bigip_reboot_timeout` is one value** for all platforms; slow
   hardware or first-boot provisioning may need more.
@@ -320,7 +363,8 @@ reviewing them against the collection source.
 | HA interlock | improvements: parse `show sys failover` text; standalone assumed to report standby | `devices[].failover_state` + `sync_status[].mode` | Structured fields; standalone devices report `active` |
 | Target volume | highest inactive volume | staged volume first, then highest inactive | Second run could reboot into the wrong volume |
 | Signature verification | added then removed ("device verifies at install") | upload sig first, assert `verified` (fail-closed, tunable) | Whether install refuses unverified images is version-dependent; make it explicit |
-| Signature upload path | `file-transfer/uploads` (stores in `/var/config/rest/downloads`) | `software-image-uploads` (stores in `/shared/images`) | The verifier looks in `/shared/images`; see A1 |
+| Signature upload path | `file-transfer/uploads` (stores in `/var/config/rest/downloads`) | `software-image-uploads` (stores in `/shared/images`) | The verifier looks in `/shared/images`; confirmed A1 |
+| ISO upload | `bigip_software_image` module | `files/bigip_upload_image.py` chunked uploader | Module fails with "too many times" on lab 21.1.0.2 (2.14 and 2.16) and leaves restjavad needing a restart; the script uploads cleanly |
 | `stat` of the ISO | default (SHA-1 the ISO) | `get_checksum: false` | Minutes saved per run |
 | Install image argument | `iso_image_name` (path) | `basename` | Module matches image names, so absolute paths now work |
 | UCS filename | date only | timestamp to the second | Same-day re-run fetched the old archive |
