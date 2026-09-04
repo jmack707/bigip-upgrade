@@ -244,8 +244,9 @@ next action:     ...
 | `Gather device identity and HA state` fails with 401 | Wrong credentials or user lacks Administrator role | `ansible-vault view group_vars/bigip/vault.yml`; check the user's role |
 | Same task fails with certificate error | `bigip_validate_certs: true` and the device uses a self-signed certificate | Install a trusted certificate, or set `bigip_validate_certs: false` for lab devices only |
 | `already running ... Nothing to do` | Device is on the target version | Expected on re-runs |
-| `Create UCS on device and fetch it` times out | Large configuration | Raise `ucs_async_timeout` (up to 1800) and `bigip_api_timeout` |
-| `Assert the UCS backup exists locally` fails | Fetch failed silently or `ucs_backup_dest` not writable | Check the directory permissions; re-run `--tags preflight,backup` |
+| `Create the UCS on the device` times out | Large configuration | Raise `ucs_async_timeout` (up to 1800) and `bigip_api_timeout` |
+| `Report the UCS download result` fails with "greater than maximum chunk size" | `bigip_ucs_download_chunk_size` set above the device's 1 MiB cap | Leave it at the default `1048576`; the download endpoint rejects larger chunks |
+| `Assert the UCS backup exists locally` fails (0 bytes) | Download wrote no data, or `ucs_backup_dest` not writable / out of space | Check `df -h` and the directory permissions on the control node; re-run `--tags preflight,backup` |
 | `Upload ISO signature file` fails (HTTP 4xx) | REST path rejected the file, or user lacks permission | See `bigip_sig_upload_path`; check `/var/log/restjavad.0.log` on the device |
 | `Report the ISO upload result` fails: "too many times" / HTTP 4xx / stale or partial upload | An earlier upload was interrupted and left chunk state in restjavad (`Received chunk for previously used offset ...`) | On the device: `rm -f /shared/images/tmp/<iso> /shared/images/<iso> && bigstart restart restjavad`, then re-run. The failure message prints the exact command |
 | ISO upload is very slow, or a chunk fails repeatedly | Slow link, or the platform rejects the 10 MiB chunk | Lower `-e bigip_upload_chunk_size=2097152` (2 MiB) or raise `bigip_api_timeout`; each chunk must complete within the timeout |

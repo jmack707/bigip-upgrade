@@ -17,3 +17,7 @@ ucs_backups/
 .vscode/
 .idea/
 *.swp
+
+# Python bytecode
+__pycache__/
+*.pyc

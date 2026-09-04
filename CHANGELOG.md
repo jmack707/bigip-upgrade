@@ -6,6 +6,14 @@ on [Keep a Changelog](https://keepachangelog.com/), and this project follows
 
 ## [Unreleased]
 
+### Fixed
+- UCS backup now downloads reliably for large archives. `bigip_ucs_fetch`
+  created the UCS correctly but its download step wrote a 0-byte file for a
+  large archive while reporting success. The role now creates the UCS on the
+  device (`only_create_file`) and downloads it with a new chunked downloader,
+  `roles/bigip_upgrade/files/bigip_download_ucs.py`. The download endpoint caps
+  a chunk at 1 MiB, so `bigip_ucs_download_chunk_size` defaults to that.
+
 ### Changed
 - Pinned `f5networks.f5_modules` to an exact version (1.43.0, the lab-validated
   release) in `requirements.yml` for reproducible runs.

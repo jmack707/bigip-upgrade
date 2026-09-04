@@ -45,7 +45,9 @@ def main():
                              "/mgmt/shared/file-transfer/ucs-downloads")
     parser.add_argument("--name", required=True, help="Remote UCS file name")
     parser.add_argument("--dest", required=True, help="Local destination path")
-    parser.add_argument("--chunk", type=int, default=10 * 1024 * 1024)
+    # The download endpoint rejects a chunk larger than 1 MiB, so that is the
+    # maximum allowed value (and the default).
+    parser.add_argument("--chunk", type=int, default=1024 * 1024)
     parser.add_argument("--retries", type=int, default=3,
                         help="Retries per chunk on a transient error")
     parser.add_argument("--timeout", type=int, default=300,

@@ -365,6 +365,7 @@ reviewing them against the collection source.
 | Signature verification | added then removed ("device verifies at install") | upload sig first, assert `verified` (fail-closed, tunable) | Whether install refuses unverified images is version-dependent; make it explicit |
 | Signature upload path | `file-transfer/uploads` (stores in `/var/config/rest/downloads`) | `software-image-uploads` (stores in `/shared/images`) | The verifier looks in `/shared/images`; confirmed A1 |
 | ISO upload | `bigip_software_image` module | `files/bigip_upload_image.py` chunked uploader | Module fails with "too many times" on lab 21.1.0.2 (2.14 and 2.16) and leaves restjavad needing a restart; the script uploads cleanly |
+| UCS download | `bigip_ucs_fetch` create-and-fetch | `only_create_file` create + `files/bigip_download_ucs.py` chunked download | Module created the UCS but wrote a 0-byte file locally on a large archive (lab 21.1.0.2, ~569 MB); the endpoint serves fine over a chunked GET capped at 1 MiB/chunk |
 | `stat` of the ISO | default (SHA-1 the ISO) | `get_checksum: false` | Minutes saved per run |
 | Install image argument | `iso_image_name` (path) | `basename` | Module matches image names, so absolute paths now work |
 | UCS filename | date only | timestamp to the second | Same-day re-run fetched the old archive |
