@@ -7,12 +7,21 @@ on [Keep a Changelog](https://keepachangelog.com/), and this project follows
 ## [Unreleased]
 
 ### Fixed
-- UCS backup now downloads reliably for large archives. `bigip_ucs_fetch`
-  created the UCS correctly but its download step wrote a 0-byte file for a
-  large archive while reporting success. The role now creates the UCS on the
-  device (`only_create_file`) and downloads it with a new chunked downloader,
-  `roles/bigip_upgrade/files/bigip_download_ucs.py`. The download endpoint caps
-  a chunk at 1 MiB, so `bigip_ucs_download_chunk_size` defaults to that.
+- UCS backup now works for large archives, where `bigip_ucs_fetch` failed at
+  both ends. Its downloader wrote a 0-byte file while reporting success, and
+  its create step polled a task status that never reports COMPLETED on a
+  long-running save, so it declared "Module timeout reached" and abandoned an
+  archive the device was still building. The role now:
+  - creates the UCS with the device's async task API and waits by polling the
+    device's UCS list until the archive appears (the device lists a UCS only
+    when it is complete); `ucs_create_poll_interval` sets the poll step, and
+    `ucs_async_timeout` the total wait. No bash endpoint, so appliance mode
+    is supported.
+  - downloads it with a new chunked downloader,
+    `roles/bigip_upgrade/files/bigip_download_ucs.py`. The download endpoint
+    caps a chunk at 1 MiB, so `bigip_ucs_download_chunk_size` defaults to that.
+  Validated against a lab 21.1.0.2 with a 569 MB UCS (download: full archive
+  in 45 s).
 
 ### Changed
 - Pinned `f5networks.f5_modules` to an exact version (1.43.0, the lab-validated

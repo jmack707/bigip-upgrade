@@ -79,9 +79,12 @@ bigip_reboot_timeout: 2400
 # (<ucs_backup_dest>/<device hostname>/<file>.ucs). Created if missing.
 ucs_backup_dest: "./ucs_backups"
 
-# Seconds to wait for the asynchronous UCS create API on the BIG-IP.
-# Valid range 150-1800 (F5 collection). Increase for large configurations.
+# Total seconds to wait for the device to finish building the UCS. The role
+# polls the device's UCS list every ucs_create_poll_interval seconds until the
+# archive appears. Raise both for a large configuration: a device whose
+# /config/filestore is hundreds of MB can take many minutes.
 ucs_async_timeout: 600
+ucs_create_poll_interval: 15
 
 # The UCS is downloaded by roles/bigip_upgrade/files/bigip_download_ucs.py, not
 # by bigip_ucs_fetch (whose downloader writes a 0-byte file for large archives).
