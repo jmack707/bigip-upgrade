@@ -35,61 +35,39 @@
     mode: "0750"
   delegate_to: localhost
 
-# The UCS is created with the device's own async task API and then waited for by
-# polling until the archive appears in the device's UCS list. bigip_ucs_fetch is
-# not used for this: it polls the task's _taskState and, on a large archive that
-# takes many minutes, never sees COMPLETED, so it reports "Module timeout
-# reached" and abandons the job even when the device is still building it
-# (reproduced on a lab 21.1.0.2 with a 569 MB UCS). The device only lists a UCS
-# once it is a complete archive, so "it appears in the list" is the completion
-# signal. This path uses no bash endpoint, so it works in appliance mode.
-- name: Start the UCS save task on the device
-  ansible.builtin.uri:
-    url: "https://{{ bigip_mgmt_host }}:{{ bigip_server_port }}/mgmt/tm/task/sys/ucs"
-    method: POST
-    url_username: "{{ bigip_username }}"
-    url_password: "{{ bigip_password }}"
-    force_basic_auth: true
-    validate_certs: "{{ bigip_validate_certs }}"
-    body_format: json
-    body: "{{ ucs_save_body }}"
-    status_code: [200, 201, 202]
-    timeout: "{{ bigip_api_timeout }}"
+# The UCS is created with 'tmsh save sys ucs', run synchronously over iControl
+# REST, because that is the only method proven to work end to end on a large
+# archive:
+#   - bigip_ucs_fetch polls the save task's _taskState and never sees COMPLETED
+#     on a long save, so it reports "Module timeout reached" and abandons a job
+#     the device is still running.
+#   - Driving the same task API directly (POST the task, then
+#     PUT _taskState: VALIDATING) starts the save — the iApps pre-save hook runs
+#     — but it then stops without writing an archive and leaves no error.
+#   - 'tmsh save sys ucs <name>' writes the archive reliably (verified on a lab
+#     21.1.0.2 with a 544 MB UCS).
+# The command blocks until the archive is written, so the provider timeout is
+# raised to ucs_async_timeout for this task only. tmsh appends the .ucs
+# extension itself, so the name is passed without it.
+- name: Create the UCS on the device
+  f5networks.f5_modules.bigip_command:
+    provider: "{{ provider | combine({'timeout': ucs_async_timeout | int}) }}"
+    commands: "{{ [ucs_save_command] }}"
+    warn: false
   delegate_to: localhost
-  no_log: true                 # body carries ucs_encryption_password when set
-  register: ucs_task
+  no_log: true                 # command carries ucs_encryption_password when set
+  register: ucs_create
   changed_when: true
   vars:
-    ucs_save_body: >-
-      {{
-        {'command': 'save', 'name': ucs_filename}
-        | combine({'options': [{'passphrase': ucs_encryption_password}]}
-                  if (ucs_encryption_password | default('') | length > 0) else {})
-      }}
+    ucs_save_command: >-
+      save sys ucs {{ ucs_filename | regex_replace('\.ucs$', '') }}
+      {{ ('passphrase ' ~ ucs_encryption_password)
+         if (ucs_encryption_password | default('') | length > 0) else '' }}
 
-- name: Record the UCS save task id
-  ansible.builtin.set_fact:
-    ucs_task_id: "{{ ucs_task.json._taskId }}"
-
-- name: Start the UCS save task running
-  ansible.builtin.uri:
-    url: "https://{{ bigip_mgmt_host }}:{{ bigip_server_port }}/mgmt/tm/task/sys/ucs/{{ ucs_task_id }}"
-    method: PUT
-    url_username: "{{ bigip_username }}"
-    url_password: "{{ bigip_password }}"   # marked no_log inside the uri module
-    force_basic_auth: true
-    validate_certs: "{{ bigip_validate_certs }}"
-    body_format: json
-    body:
-      _taskState: VALIDATING
-    status_code: [200, 202]
-    timeout: "{{ bigip_api_timeout }}"
-  delegate_to: localhost
-  changed_when: true
-
-# Polls until the device lists the archive. Total wait is
-# ucs_async_timeout seconds, in ucs_create_poll_interval steps.
-- name: Wait for the UCS to finish building on the device
+# The save above is synchronous, so the archive should already be listed. A
+# short poll absorbs any lag in the device refreshing its UCS list, and fails
+# quickly (rather than after the full create window) if nothing was written.
+- name: Confirm the UCS is listed on the device
   ansible.builtin.uri:
     url: "https://{{ bigip_mgmt_host }}:{{ bigip_server_port }}/mgmt/tm/sys/ucs"
     method: GET
@@ -103,7 +81,7 @@
   delegate_to: localhost
   register: ucs_listing
   until: ucs_filename in (ucs_listing.content | default(''))
-  retries: "{{ [1, (ucs_async_timeout | int // ucs_create_poll_interval | int)] | max }}"
+  retries: "{{ ucs_confirm_retries }}"
   delay: "{{ ucs_create_poll_interval }}"
   changed_when: false
 
